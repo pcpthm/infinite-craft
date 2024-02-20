@@ -1,16 +1,16 @@
-use std::fmt::Debug;
+use std::{collections::BTreeSet, fmt::Debug};
 
 #[derive(Debug, Clone)]
 pub struct UniformFamily {
-    pub(crate) card: usize,
-    pub(crate) buf: Vec<u32>, // store all sets in a continuous buffer, by chunks
+    card: usize,
+    sets: BTreeSet<Vec<u32>>,
 }
 
 impl UniformFamily {
     pub fn new() -> Self {
         Self {
             card: usize::MAX,
-            buf: Vec::new(),
+            sets: BTreeSet::new(),
         }
     }
 
@@ -20,12 +20,13 @@ impl UniformFamily {
 
     pub fn clear(&mut self) {
         self.card = usize::MAX;
-        self.buf.clear();
+        self.sets.clear();
     }
 
     pub fn set_single_empty(&mut self) {
         self.card = 0;
-        self.buf.clear();
+        self.sets.clear();
+        self.sets.insert(vec![]);
     }
 
     #[inline]
@@ -35,16 +36,12 @@ impl UniformFamily {
 
     #[inline]
     pub fn len(&self) -> usize {
-        if self.card == 0 {
-            1
-        } else {
-            self.buf.len() / self.card
-        }
+        self.sets.len()
     }
 
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &[u32]> {
-        (0..self.len()).map(|i| &self.buf[i * self.card..][..self.card])
+        self.sets.iter().map(|set| set.as_slice())
     }
 
     pub fn add_merge(&mut self, sets1: &Self, sets2: &Self, u3: u32, max_len: usize) -> bool {
@@ -65,54 +62,24 @@ impl UniformFamily {
             }
             if c3 < self.card {
                 self.card = c3;
-                self.buf.clear();
+                self.sets.clear();
                 updated = true;
             }
             if max_len <= self.len() {
                 continue;
             }
 
-            let end_i = self.buf.len();
-            merge_ex(set1, set2, u3, &mut self.buf);
-
-            assert!(self.buf.len() == end_i + c3);
-            if end_i == 0 {
-                updated = true;
-                continue;
+            let mut set3 = Vec::with_capacity(c3);
+            merge(set1, set2, &mut set3);
+            if let Err(i) = set3.binary_search(&u3) {
+                set3.insert(i, u3);
             }
 
-            let mut insert_i = end_i;
-            while c3 <= insert_i && self.buf[end_i..] < self.buf[insert_i - c3..][..c3] {
-                insert_i -= c3;
-            }
-            if c3 <= insert_i && self.buf[insert_i - c3..][..c3] == self.buf[end_i..] {
-                self.buf.truncate(end_i);
-            } else {
-                self.buf[insert_i..].rotate_right(c3);
-                updated = true;
-            }
+            assert!(set3.len() == c3);
+
+            self.sets.insert(set3);
         }
         updated
-    }
-
-    pub fn sort_dedup(&mut self, buf: &mut Vec<u32>, tmp_i: &mut Vec<usize>) {
-        if self.buf.len() <= self.card {
-            return;
-        }
-
-        buf.clear();
-        buf.extend_from_slice(&self.buf);
-
-        let card = self.card;
-        tmp_i.clear();
-        tmp_i.extend((0..buf.len()).step_by(card));
-        tmp_i.sort_by(|&i, &j| buf[i..][..card].cmp(&buf[j..][..card]));
-        tmp_i.dedup_by(|&mut i, &mut j| buf[i..][..card] == buf[j..][..card]);
-
-        self.buf.clear();
-        for &i in tmp_i.iter() {
-            self.buf.extend_from_slice(&buf[i..][..card]);
-        }
     }
 }
 
@@ -144,17 +111,4 @@ fn merge(set1: &[u32], set2: &[u32], out: &mut Vec<u32>) {
         out.push(u1);
     }
     out.extend(iter2);
-}
-
-fn merge_ex(set1: &[u32], set2: &[u32], u3: u32, out: &mut Vec<u32>) {
-    let i_start = out.len();
-    merge(set1, set2, out);
-
-    let mut i_insert = out.len();
-    while i_start < i_insert && u3 < out[i_insert - 1] {
-        i_insert -= 1;
-    }
-    if !(i_start < i_insert && u3 == out[i_insert - 1]) {
-        out.insert(i_insert, u3);
-    }
 }
