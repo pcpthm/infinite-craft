@@ -1,0 +1,11 @@
+/.Trash-*
+/.vscode
+/bin
+/*.log
+/*.db
+/*.db-journal
+/*.json
+/*.txt
+/*.bincode
+/*.py
+!/recipe-map.bincode

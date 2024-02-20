@@ -1,0 +1,13 @@
+[package]
+name = "combine-recipes"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+infinite-craft = { path = ".." }
+
+anyhow = "1.0.80"
+bincode = "1.3.3"
+rusqlite = "0.31.0"
+serde = { version = "1.0.196", features = ["derive"] }
+serde_json = "1.0.113"
