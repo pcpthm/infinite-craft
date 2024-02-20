@@ -8,11 +8,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("{} items, {} recipes", rm.num_items(), rm.num_recipes());
 
-    let max_count = 4;
+    let max_count = usize::MAX;
     let max_card = 300;
     println!("max_width={}, max_card={}", max_count, max_card);
 
-    // let mut search = Search::new(rm.num_items(), max_width, max_card);
     let mut search = Search::new(rm.num_items(), max_count, max_card);
     let graph = rm.make_graph();
 
