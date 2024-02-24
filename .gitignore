@@ -1,0 +1,9 @@
+/.Trash-*
+/.vscode
+/bin
+/target
+/*.db
+/*.db-journal
+/*.log
+/*.data
+/__pycache__
