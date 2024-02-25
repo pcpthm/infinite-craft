@@ -13,13 +13,10 @@ import sqlite3
 
 
 def get_pair_request_raw(first: str, second: str) -> Any:
-    res = requests.get(
+    res = sess.get(
         "https://neal.fun/api/infinite-craft/pair",
         params=dict(first=first, second=second),
-        headers={
-            "Referer": "https://neal.fun/infinite-craft/",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
-        })
+        headers={"Referer": "https://neal.fun/infinite-craft/"})
     res.raise_for_status()
     return res.json()
 
@@ -167,7 +164,9 @@ def validate_depth():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    requests.Session().mount("https://", HTTPAdapter(max_retries=10))
+    sess = requests.Session()
+    sess.mount("https://", HTTPAdapter(max_retries=10))
+    sess.headers["User-Agent"] = "Mozilla/5.0 (X11; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0"
 
     conn = sqlite3.Connection("infinite-craft.db")
     conn.executescript("""
