@@ -1,158 +1,126 @@
 mod cache;
+mod enumeration;
 mod helper;
 
-use std::{
-    fs::File,
-    io::{BufWriter, Write},
-    str::FromStr,
-    time::Instant,
-};
+use std::{str::FromStr, time::Instant};
 
 use anyhow::Context;
-use cache::{PairCache, NOTHING};
+use cache::PairCache;
 use helper::{DynamicCache, RequestProxy};
 
-struct Enumeration {
-    init_len: usize,
-    set: Vec<u32>,
-    max_set_len: usize,
-    queue: Vec<u32>,
-    blocked: Vec<bool>,
+use crate::{cache::NOTHING, enumeration::HyperpathIter};
 
-    count: usize,
-    min_sets: Vec<Vec<Vec<u32>>>,
-}
+fn get_all_min_sets(init: &[u32], max_depth: usize, cache: &PairCache) -> anyhow::Result<()> {
+    let mut set = Vec::with_capacity(init.len() + max_depth + 1);
+    set.extend_from_slice(init);
 
-impl Enumeration {
-    pub fn new() -> Self {
-        Self {
-            init_len: 0,
-            set: Vec::new(),
-            max_set_len: 0,
-            queue: Vec::new(),
-            blocked: Vec::new(),
-            count: 0,
-            min_sets: Vec::new(),
-        }
+    let mut min_sets: Vec<Vec<Vec<u32>>> = vec![Vec::new(); cache.num_items()];
+    for &u in init {
+        min_sets[u as usize].push(Vec::new());
     }
-
-    pub fn run(&mut self, init: &[u32], max_depth: usize, recipe: &mut DynamicCache) {
-        self.init_len = init.len();
-        self.max_set_len = init.len() + max_depth;
-
-        self.set.clear();
-        self.set.extend_from_slice(init);
-
-        for &u in init.iter() {
-            self.add_set(0, u);
-        }
-
-        for (i, &u) in init.iter().enumerate() {
-            for &v in &init[i..] {
-                let w = recipe.get([u, v]).expect("couldn't get recipe");
-                if w == NOTHING || w == u || w == v {
-                    continue;
-                }
-                self.blocked.resize(recipe.num_items(), false);
-                if !std::mem::replace(&mut self.blocked[w as usize], true) {
-                    self.queue.push(w);
-                }
-            }
-        }
-        self.dfs(0, recipe);
-
-        for &w in &self.queue {
-            self.blocked[w as usize] = false;
-        }
-        self.queue.clear();
-    }
-
-    fn dfs(&mut self, qh: usize, recipe: &mut DynamicCache) {
-        let qt: usize = self.queue.len();
-        for i in qh..qt {
-            let u = self.queue[i];
-            self.set.push(u);
-
-            if self.set.len() == self.max_set_len {
-                self.add_set(self.set.len() - self.init_len, u);
-            }
-
-            if self.set.len() < self.max_set_len {
-                for &v in &self.set {
-                    let w = recipe.get([u, v]).expect("couldn't get recipe");
-                    if w == NOTHING || w == u || w == v {
-                        continue;
-                    }
-                    self.blocked.resize(recipe.num_items(), false);
-                    if !std::mem::replace(&mut self.blocked[w as usize], true) {
-                        self.queue.push(w);
-                    }
-                }
-                self.dfs(i + 1, recipe);
-
-                for &w in &self.queue[qt..] {
-                    self.blocked[w as usize] = false;
-                }
-                self.queue.truncate(qt);
-            }
-            self.set.pop();
-        }
-    }
-
-    fn add_set(&mut self, depth: usize, u: u32) {
-        self.count += 1;
-
-        if self.min_sets.len() <= u as usize {
-            self.min_sets.resize_with(u as usize + 1, Vec::new);
-        }
-        let sets = &mut self.min_sets[u as usize];
-        if sets.is_empty() || depth < sets[0].len() {
-            sets.clear();
-        }
-        if sets.is_empty() || depth == sets[0].len() {
-            sets.push(self.set[self.init_len..].to_vec());
-        }
-    }
-}
-
-fn get_all_min_sets(
-    init: &[&str],
-    max_depth: usize,
-    recipe: &mut DynamicCache,
-    out: &mut dyn Write,
-) -> anyhow::Result<()> {
-    let init: Vec<_> = init.iter().map(|name| recipe.intern(name)).collect();
-    let mut enumeration = Enumeration::new();
 
     for depth in 1..=max_depth {
         let instant = Instant::now();
-        let last_count = enumeration.count;
-        enumeration.run(&init, depth, recipe);
+
+        let mut blocked = vec![false; cache.num_items()];
+        blocked[NOTHING as usize] = true;
+
+        let mut iter = HyperpathIter::new(depth, blocked);
+        for &u in &set {
+            for &v in &set {
+                if let Some(w) = cache.get([u, v]) {
+                    iter.enqueue(w);
+                }
+            }
+        }
+
+        let mut count = 0;
+        while let Some(u) = iter.next(&mut set) {
+            if set.len() < init.len() + depth {
+                for &v in &set {
+                    if let Some(w) = cache.get([u, v]) {
+                        iter.enqueue(w);
+                    }
+                }
+            } else {
+                let set = &set[init.len()..];
+                let sets = &mut min_sets[u as usize];
+                if !sets.is_empty() && set.len() < sets[0].len() {
+                    sets.clear();
+                }
+                if sets.is_empty() || set.len() == sets[0].len() {
+                    sets.push(set.to_vec());
+                }
+                count += 1;
+            }
+        }
+
         eprintln!(
             "depth={}: {} sets enumerated in {}ms",
             depth,
-            enumeration.count - last_count,
+            count,
             instant.elapsed().as_millis()
         );
 
-        let cache = recipe.cache();
-        for (u, sets) in (0u32..).zip(&enumeration.min_sets).skip(1) {
+        for (u, sets) in (0u32..).zip(&min_sets).skip(1) {
             if sets.is_empty() || sets[0].len() != depth {
                 continue;
             }
-            writeln!(out, "{}={}={}", cache.name(u), sets[0].len(), sets.len())?;
+            println!("{}={}={}", cache.name(u), sets[0].len(), sets.len());
             for set in sets {
                 for (i, &v) in set.iter().enumerate() {
                     if i != 0 {
-                        write!(out, "=")?;
+                        print!("=");
                     }
-                    write!(out, "{}", cache.name(v))?;
+                    print!("{}", cache.name(v));
                 }
-                writeln!(out)?;
+                println!();
             }
-            writeln!(out)?;
+            println!();
         }
     }
+    Ok(())
+}
+
+fn enumerate_dynamic(
+    init: &[u32],
+    depth: usize,
+    max_tokens: usize,
+    recipe: &mut DynamicCache,
+) -> anyhow::Result<()> {
+    let max_num_items = recipe.cache().num_items() + 1e6 as usize;
+
+    let mut blocked = vec![false; max_num_items];
+    blocked[NOTHING as usize] = true;
+    let mut iter = HyperpathIter::new(depth, blocked);
+
+    let mut set = Vec::with_capacity(init.len() + depth + 1);
+    set.extend_from_slice(init);
+
+    for &u in &set {
+        for &v in &set {
+            iter.enqueue(recipe.get([u, v])?);
+        }
+    }
+
+    let mut count = 0;
+    while let Some(u) = iter.next(&mut set) {
+        if set.len() < init.len() + depth {
+            for &v in &set {
+                let w = recipe.get([u, v])?;
+                if w == NOTHING || w == u || w == v {
+                    continue;
+                }
+                if recipe.get_token_count(w)? <= max_tokens {
+                    iter.enqueue(w);
+                }
+            }
+        }
+
+        count += 1;
+    }
+    eprintln!("depth={}: count={}", depth, count);
+
     Ok(())
 }
 
@@ -160,14 +128,28 @@ fn main() -> anyhow::Result<()> {
     match std::env::args().nth(1).as_deref() {
         None => eprintln!("Subcommand expected"),
         Some("depth") => {
-            let max_depth = usize::from_str(&std::env::args().nth(2).context("depth expected")?)?;
-
             let mut recipe = DynamicCache::new(PairCache::new(), RequestProxy::start()?);
             recipe.populate_cache()?;
 
             let init = ["Water", "Fire", "Wind", "Earth"];
-            let mut out = BufWriter::new(File::create("depth.log")?);
-            get_all_min_sets(&init, max_depth, &mut recipe, &mut out)?;
+            let init: Vec<_> = init.iter().map(|name| recipe.intern(name)).collect();
+
+            let max_depth = usize::from_str(&std::env::args().nth(2).context("depth expected")?)?;
+            get_all_min_sets(&init, max_depth, recipe.cache())?;
+        }
+        Some("depth-dynamic") => {
+            let mut recipe = DynamicCache::new(PairCache::new(), RequestProxy::start()?);
+            recipe.populate_cache()?;
+
+            let init = ["Water", "Fire", "Wind", "Earth"];
+            let init: Vec<_> = init.iter().map(|name| recipe.intern(name)).collect();
+
+            let max_depth = usize::from_str(&std::env::args().nth(2).context("depth expected")?)?;
+            let max_tokens = usize::from_str(&std::env::args().nth(3).context("max_tokens")?)?;
+
+            for depth in 1..=max_depth {
+                enumerate_dynamic(&init, depth, max_tokens, &mut recipe)?;
+            }
         }
         _ => eprintln!("Unknown subcommand"),
     };

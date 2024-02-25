@@ -5,5 +5,5 @@
 /*.db
 /*.db-journal
 /*.log
-/*.data
+/perf.data*
 /__pycache__

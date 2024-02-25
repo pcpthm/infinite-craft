@@ -78,21 +78,17 @@ DATA_DIR = Path(os.getenv("IC_DATA_DIR") or ".")
 
 
 def main():
-    logging.info("count(pair) = %d, count(result) = %d, count(discovery) = %d",
-                 conn.execute("select count(*) from pair").fetchone()[0],
-                 conn.execute("select count(distinct result) from pair where result is not null").fetchone()[0],
-                 conn.execute("select count(*) from discovery").fetchone()[0])
-
     try:
         for line in sys.stdin:
-            line = line.strip()
-            if line == "==dump":
+            cmd, rest = line.strip().split(":", maxsplit=1)
+            if cmd == "pair":
+                first, second = rest.split("=")
+                result = get_pair(first, second)
+                print(result or "", flush=True)
+            elif cmd == "dump":
                 dump_db()
-                continue
-
-            first, second = line.split("=")
-            result = get_pair(first, second)
-            print(result or "", flush=True)
+            elif cmd == "tokenize":
+                print(len(tokenize_str(rest)), flush=True)
     except BrokenPipeError:
         pass
     except KeyboardInterrupt:
@@ -110,6 +106,17 @@ def dump_db():
                 print(first, second, result, sep="=")
 
     print(flush=True)
+
+
+llama_tokenizer = None
+
+
+def tokenize_str(text: str) -> list[int]:
+    from transformers import AutoTokenizer
+    global llama_tokenizer
+    if llama_tokenizer is None:
+        llama_tokenizer = AutoTokenizer.from_pretrained("TheBloke/Llama-2-7B-AWQ")
+    return llama_tokenizer(text, add_special_tokens=False).input_ids
 
 
 def validate_depth():
