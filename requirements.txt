@@ -1,1 +1,2 @@
 requests
+tokenizers==0.15.2

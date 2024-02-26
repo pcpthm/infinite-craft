@@ -1,11 +1,13 @@
-pub struct HyperpathIter {
+//! Redelmeier's algorithm for hyperpath enumeration.
+
+pub struct SetEnumeration {
     queue: Vec<u32>,
     blocked: Vec<bool>,
     stack: Vec<(usize, usize)>,
     max_depth: usize,
 }
 
-impl HyperpathIter {
+impl SetEnumeration {
     pub fn new(max_depth: usize, blocked: Vec<bool>) -> Self {
         let mut stack = Vec::with_capacity(max_depth + 1);
         stack.push((0, 0));
@@ -46,46 +48,37 @@ impl HyperpathIter {
         None
     }
 
-    pub fn enqueue(&mut self, u: u32) -> bool {
-        if std::mem::replace(&mut self.blocked[u as usize], true) {
-            return false;
+    pub fn enqueue(&mut self, u: u32) {
+        if !std::mem::replace(&mut self.blocked[u as usize], true) {
+            self.queue.push(u);
         }
-        self.queue.push(u);
-        true
     }
 }
 
 #[test]
-fn enumerate_lattice_animals() {
+fn count_fixed_polyominos() {
     let n = 6;
-    let height: usize = n;
-    let width = n * 2 - 1;
+    let width = n * 2 - 1; // The grid is n ✕ (2n-1) and (0, n-1) is the lexcographic first block.
 
-    let start = 0 * width as u32 + (n - 1) as u32;
-    let mut blocked = vec![false; height * width];
-    for x in 0..n - 1 {
-        blocked[x] = true;
-    }
+    let mut blocked = vec![false; n * width];
+    blocked[0..n - 1].iter_mut().for_each(|b| *b = true);
 
-    let mut iter = HyperpathIter::new(n, blocked);
-    iter.enqueue(start);
+    let mut iter = SetEnumeration::new(n, blocked);
+    iter.enqueue((n - 1) as u32);
 
     let mut count = vec![0; n + 1];
     let mut path = Vec::with_capacity(n);
     while let Some(u) = iter.next(&mut path) {
         count[path.len()] += 1;
         if path.len() < n {
-            let y: i32 = (u / width as u32) as i32;
-            let x = (u % width as u32) as i32;
-            for (dy, dx) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
-                let y = y + dy;
-                let x = x + dx;
-                if (y as usize) < height && (x as usize) < width {
-                    iter.enqueue(y as u32 * width as u32 + x as u32);
-                }
+            iter.enqueue(u - 1);
+            iter.enqueue(u + 1);
+            iter.enqueue(u + width as u32);
+            if width <= u as _ {
+                iter.enqueue(u - width as u32);
             }
         }
     }
-    println!("count = {:?}", count);
-    assert_eq!(count[2..=6], vec![2, 6, 19, 63, 216]);
+
+    assert_eq!(count[1..], vec![1, 2, 6, 19, 63, 216]);
 }
