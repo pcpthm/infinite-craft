@@ -22,10 +22,6 @@ impl Cache {
         }
     }
 
-    pub fn num_items(&self) -> usize {
-        self.name.len()
-    }
-
     pub fn intern(&mut self, name: &str) -> u32 {
         if let Some(&id) = self.id.get(name) {
             return id;

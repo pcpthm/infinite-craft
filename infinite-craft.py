@@ -1,11 +1,10 @@
 from datetime import datetime, timezone
-import json
+import time
 from typing import Any, Optional
 import logging
 import sys
 import sqlite3
 import requests
-from requests.adapters import HTTPAdapter
 from tokenizers import Tokenizer
 from tqdm import tqdm
 
@@ -18,15 +17,23 @@ def get_pair_request_raw(first: str, second: str) -> Any:
     global sess
     if not sess:
         sess = requests.Session()
-        sess.mount("https://", HTTPAdapter(max_retries=10))
         sess.headers["User-Agent"] = "Mozilla/5.0 (X11; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0"
 
-    res = sess.get(
-        "https://neal.fun/api/infinite-craft/pair",
-        params=dict(first=first, second=second),
-        headers={"Referer": "https://neal.fun/infinite-craft/"})
-    res.raise_for_status()
-    return res.json()
+    retries = 0
+    while True:
+        try:
+            res = sess.get(
+                "https://neal.fun/api/infinite-craft/pair",
+                params=dict(first=first, second=second),
+                headers={"Referer": "https://neal.fun/infinite-craft/"})
+            res.raise_for_status()
+            return res.json()
+        except Exception as e:
+            retry_time = 2 ** min(retries, 10)
+            retries += 1
+            logging.warning("request error: %r; retry %d in %.1fs", e, retries, retry_time)
+            time.sleep(retry_time)
+            continue
 
 
 def get_pair(first: str, second: str, force_request: bool = False) -> Optional[str]:
@@ -52,10 +59,13 @@ def get_pair(first: str, second: str, force_request: bool = False) -> Optional[s
     conn.execute("insert or replace into pair (first, second, result, created_at) values (?, ?, ?, ?)",
                  (first, second, result, created_at))
 
+    if existing is not None and existing[0] != result:
+        logging.info("pair(%r, %r) = %r != %r", first, second, result, existing[0])
+
     if result is not None:
         if conn.execute("insert or ignore into item (name, emoji, is_new, created_at) values (?, ?, ?, ?)",
                         (result, emoji, is_new, created_at)).rowcount != 0:
-            logging.info("item: pair(%r, %r) = %r, is_new=%r", first, second, result, is_new)
+            logging.debug("item: pair(%r, %r) = %r, is_new=%r", first, second, result, is_new)
 
     conn.commit()
     return result
@@ -106,4 +116,17 @@ begin;
 commit;
     """)
 
-    main()
+    item_set = set()
+    for name, in conn.execute("select name from item"):
+        item_set.add(name)
+
+    to_pair = []
+    for first, second, result in conn.execute("select first, second, result from pair"):
+        if result is not None and result not in item_set:
+            item_set.add(result)
+            to_pair.append((first, second))
+
+    for first, second in tqdm(to_pair):
+        get_pair(first, second, True)
+
+    # main()
