@@ -1,26 +1,14 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
+use crate::{Recipe, SymPair};
+
 pub const BLOCKED: u8 = 1;
 pub const BLOCKED_FIRST: u8 = 2;
 pub const BLOCKED_SECOND: u8 = 4;
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SymPair(u64);
-
-impl SymPair {
-    pub fn new(u: u32, v: u32) -> Self {
-        let (u, v) = if u > v { (v, u) } else { (u, v) };
-        Self((u as u64) << 32 | v as u64)
-    }
-
-    pub fn get(self) -> [u32; 2] {
-        [(self.0 >> 32) as u32, self.0 as u32]
-    }
-}
 
 fn enum_rec(
     d: usize,
@@ -28,7 +16,7 @@ fn enum_rec(
     queue: &mut Vec<u32>,
     blocked: &mut Vec<u8>,
     set: &mut Vec<u32>,
-    recipe: &HashMap<SymPair, u32>,
+    recipe: &Recipe,
     on_leaf: &mut impl FnMut(usize, &[u32], &[u32], &[u8]),
 ) {
     if d == 0 {
@@ -43,7 +31,7 @@ fn enum_rec(
         }
         if blocked[u as usize] & BLOCKED_FIRST == 0 {
             for &v in set.iter() {
-                if let Some(&w) = recipe.get(&SymPair::new(u, v)) {
+                if let Some(w) = recipe.get(u, v) {
                     if blocked[w as usize] & BLOCKED == 0 {
                         blocked[w as usize] |= BLOCKED;
                         queue.push(w);
@@ -66,7 +54,7 @@ pub fn collect_states(
     depth: usize,
     init: &[u32],
     blocked: &[u8],
-    recipe: &HashMap<SymPair, u32>,
+    recipe: &Recipe,
     states: &mut Vec<(usize, Vec<u32>, Vec<u32>)>,
 ) {
     let mut queue = Vec::new();
@@ -99,7 +87,7 @@ pub fn collect_new_pairs(
     depth: usize,
     init: &[u32],
     blocked: &[u8],
-    recipe: &HashMap<SymPair, u32>,
+    recipe: &Recipe,
     new_pairs: &mut HashSet<SymPair>,
 ) {
     let parallel_depth = (depth - 1).min(5);
@@ -126,13 +114,11 @@ pub fn collect_new_pairs(
                     for &u in &queue[qh..] {
                         if blocked[u as usize] & BLOCKED_FIRST == 0 {
                             for &v in set.iter() {
-                                if !recipe.contains_key(&SymPair::new(u, v)) {
+                                if !recipe.contains(u, v) {
                                     new_pairs.insert(SymPair::new(u, v));
                                 }
                             }
-                            if blocked[u as usize] & BLOCKED_SECOND == 0
-                                && !recipe.contains_key(&SymPair::new(u, u))
-                            {
+                            if blocked[u as usize] & BLOCKED_SECOND == 0 && !recipe.contains(u, u) {
                                 new_pairs.insert(SymPair::new(u, u));
                             }
                         }
