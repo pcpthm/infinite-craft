@@ -11,17 +11,25 @@ from tqdm import tqdm
 
 sess = None
 tokenizer = None
+last_request = 0
 
 
 def get_pair_request_raw(first: str, second: str) -> Any:
-    global sess
+    global sess, last_request
     if not sess:
         sess = requests.Session()
-        sess.headers["User-Agent"] = "Mozilla/5.0 (X11; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0"
+        sess.headers["User-Agent"] = "Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0"
+        sess.headers["Alt-Used"] = "neal.fun"
+        sess.headers["Sec-Fetch-Dest"] = "empty"
+        sess.headers["Sec-Fetch-Mode"] = "cors"
+        sess.headers["Sec-Fetch-Site"] = "same-origin"
 
     retries = 0
     while True:
         try:
+            now = time.monotonic()
+            time.sleep(max(0, 0.5 - (now - last_request)))
+            last_request = now
             res = sess.get(
                 "https://neal.fun/api/infinite-craft/pair",
                 params=dict(first=first, second=second),
@@ -65,7 +73,7 @@ def get_pair(first: str, second: str, force_request: bool = False) -> Optional[s
     if result is not None:
         if conn.execute("insert or ignore into item (name, emoji, is_new, created_at) values (?, ?, ?, ?)",
                         (result, emoji, is_new, created_at)).rowcount != 0:
-            logging.debug("item: pair(%r, %r) = %r, is_new=%r", first, second, result, is_new)
+            logging.info("item: pair(%r, %r) = %r, is_new=%r", first, second, result, is_new)
 
     conn.commit()
     return result
@@ -89,15 +97,22 @@ def tokenize(name: str) -> int:
 
 def main():
     try:
+        progress = tqdm()
         for line in sys.stdin:
             cmd, rest = line.strip().split(":", maxsplit=1)
             if cmd == "pair":
                 first, second = rest.split("=")
                 result = get_pair(first, second)
+                progress.update(1)
                 print(result or "", flush=True)
             elif cmd == "tokenize":
                 count = tokenize(rest)
+                progress.update(1)
                 print(count, flush=True)
+            elif cmd == "progress_reset":
+                count, rest = rest.split(" ", maxsplit=1)
+                progress.set_description(rest, False)
+                progress.reset(int(count))
     except BrokenPipeError:
         pass
     except KeyboardInterrupt:
@@ -116,17 +131,4 @@ begin;
 commit;
     """)
 
-    item_set = set()
-    for name, in conn.execute("select name from item"):
-        item_set.add(name)
-
-    to_pair = []
-    for first, second, result in conn.execute("select first, second, result from pair"):
-        if result is not None and result not in item_set:
-            item_set.add(result)
-            to_pair.append((first, second))
-
-    for first, second in tqdm(to_pair):
-        get_pair(first, second, True)
-
-    # main()
+    main()

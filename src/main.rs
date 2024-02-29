@@ -1,152 +1,218 @@
-mod cache;
-mod enumeration;
 mod helper;
 
-use std::path::PathBuf;
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    path::PathBuf,
+    time::Instant,
+};
 
-use cache::{Cache, NOTHING};
-use enumeration::SetEnumeration;
+use clap::Parser;
 use helper::Helper;
 
-struct SearchArgs<'a> {
-    init_set: Vec<&'a str>,
-    subset_of: Vec<&'a str>,
+const UNKNOWN: u32 = 0;
+const NOTHING: u32 = 1;
 
-    max_token_first: usize,
-    max_token_second: usize,
-
-    alloc_size: usize,
+pub struct NameMap {
+    name: Vec<String>,
+    id: HashMap<String, u32>,
 }
 
-fn enqueue_next(
-    depth: usize,
-    u: u32,
-    args: &SearchArgs,
-    iter: &mut SetEnumeration,
-    to_pair: &mut Vec<(usize, u32)>,
-    helper: &mut Helper,
-) -> anyhow::Result<()> {
-    let token_count = helper.tokenize(u)?;
-    if token_count <= args.max_token_second {
-        to_pair.push((depth, u));
-    }
-    if token_count <= args.max_token_first {
-        for &(_, v) in to_pair.iter() {
-            iter.enqueue(helper.pair(u, v)?);
+impl NameMap {
+    pub fn new() -> Self {
+        Self {
+            name: vec![String::new(), "Nothing".to_owned()],
+            id: [("".to_owned(), NOTHING)].into_iter().collect(),
         }
     }
-    Ok(())
+
+    pub fn intern(&mut self, name: &str) -> u32 {
+        if let Some(&id) = self.id.get(name) {
+            return id;
+        }
+        let id = self.name.len() as u32;
+        self.name.push(name.to_string());
+        self.id.insert(name.to_owned(), id);
+        id
+    }
+
+    pub fn name(&self, id: u32) -> &str {
+        &self.name[id as usize]
+    }
+
+    pub fn len(&self) -> usize {
+        self.name.len()
+    }
 }
 
-fn enumerate_sets(max_depth: usize, args: &SearchArgs) -> anyhow::Result<()> {
-    let mut cache = Cache::new();
-    let mut helper = Helper::start(&mut cache)?;
+const BLOCKED: u8 = 1;
+const BLOCKED_FIRST: u8 = 2;
+const BLOCKED_SECOND: u8 = 4;
+const BLOCKED_INIT: u8 = 8;
 
-    let mut blocked = vec![false; args.alloc_size];
-    blocked[NOTHING as usize] = true;
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SymPair(u64);
 
-    if !args.subset_of.is_empty() {
-        let mut allowed = vec![false; args.alloc_size];
-        for &name in args.init_set.iter().chain(&args.subset_of) {
-            allowed[helper.intern(name) as usize] = true;
+impl SymPair {
+    pub fn new(u: u32, v: u32) -> Self {
+        let (u, v) = if u > v { (v, u) } else { (u, v) };
+        Self((u as u64) << 32 | v as u64)
+    }
+
+    pub fn get(self) -> [u32; 2] {
+        [(self.0 >> 32) as u32, self.0 as u32]
+    }
+}
+
+fn collect_next_pairs(
+    rem_depth: usize,
+    qh: usize,
+    queue: &mut Vec<u32>,
+    blocked: &mut [u8],
+    to_pair: &mut Vec<u32>,
+    recipe: &mut HashMap<SymPair, u32>,
+) {
+    let qt = queue.len();
+    for i in qh..qt {
+        let u = queue[i];
+        if blocked[u as usize] & (BLOCKED_SECOND | BLOCKED_INIT) == 0 {
+            to_pair.push(u);
         }
-        blocked.iter_mut().zip(allowed).for_each(|(b, a)| *b |= !a);
-    }
-
-    let mut iter = SetEnumeration::new(max_depth, blocked);
-    let mut to_pair = Vec::with_capacity(args.init_set.len() + max_depth);
-
-    for &name in &args.init_set {
-        let u = helper.intern(name);
-        enqueue_next(0, u, args, &mut iter, &mut to_pair, &mut helper)?;
-    }
-
-    let mut count = vec![0u64; max_depth + 1];
-    count[0] += 1;
-
-    let mut set = Vec::with_capacity(max_depth);
-    while let Some(u) = iter.next(&mut set) {
-        let depth = set.len();
-        while !to_pair.is_empty() && depth <= to_pair.last().unwrap().0 {
+        if blocked[u as usize] & BLOCKED_FIRST == 0 {
+            for &v in to_pair.iter() {
+                match recipe.entry(SymPair::new(u, v)) {
+                    Entry::Occupied(entry) => {
+                        let w = *entry.get();
+                        if blocked[w as usize] & BLOCKED == 0 {
+                            blocked[w as usize] |= BLOCKED;
+                            queue.push(w);
+                        }
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(UNKNOWN);
+                    }
+                }
+            }
+        }
+        if rem_depth > 0 {
+            collect_next_pairs(rem_depth - 1, i + 1, queue, blocked, to_pair, recipe);
+        }
+        for &w in &queue[qt..] {
+            blocked[w as usize] &= !BLOCKED;
+        }
+        queue.truncate(qt);
+        if blocked[u as usize] & (BLOCKED_SECOND | BLOCKED_INIT) == 0 {
             to_pair.pop();
         }
-        if depth < max_depth {
-            enqueue_next(depth, u, args, &mut iter, &mut to_pair, &mut helper)?;
-        }
-        count[depth] += 1;
-
-        if depth + 7 <= max_depth {
-            eprint!("progress: {:?}\r", count);
-        }
     }
+}
 
-    for (depth, &count) in count.iter().enumerate() {
-        println!("depth={}: {}", depth, count);
-    }
+#[derive(Parser)]
+struct SetEnumArgs {
+    /// Maximum depth to search.
+    #[clap(long, default_value_t = 5)]
+    depth: usize,
 
-    Ok(())
+    /// Initial set of items that can be freely used.
+    #[clap(long, default_values_t = ["Water", "Fire", "Wind", "Earth"].map(String::from))]
+    init: Vec<String>,
+
+    #[clap(long = "init-file")]
+    init_file: Option<PathBuf>,
+
+    /// Maximum token count of an item to expand the search from.
+    #[clap(long, default_value_t = 20)]
+    token1: usize,
+
+    /// Maximum token count of an item to be tried for pairing.
+    #[clap(long, default_value_t = 20)]
+    token2: usize,
+
+    /// Restrict the search to a subset of items. Initial items are always allowed.
+    #[clap(long)]
+    subset: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
-    let matches = clap::Command::new("enum")
-        .arg(
-            clap::arg!(--"depth" <DEPTH> "Maximum depth to search.")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("5"),
-        )
-        .arg(
-            clap::arg!(--"init" <ITEM>... "Initial set of items that can be freely used.")
-                .num_args(0..)
-                .default_values(["Water", "Fire", "Wind", "Earth"]),
-        )
-        .arg(
-            clap::arg!(--"init-file" <FILE> "Initial set of items read from file, appended to items specified by --init flag.")
-                .value_parser(clap::value_parser!(PathBuf))
-        )
-        .arg(
-            clap::arg!(--"token-first" <COUNT> "Maximum token count of an item to expand the search from.")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("20"),
-        )
-        .arg(
-            clap::arg!(--"token-second" <COUNT> "Maximum token count of an item to be tried for pairing.")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("20"),
-        )
-        .arg(
-            clap::arg!(--"subset-file" <FILE> "Restrict the search to a subset of items. Initial items are always allowed.")
-            .value_parser(clap::value_parser!(PathBuf))
-        )
-        .arg(
-            clap::arg!(--"alloc-size" <INTEGER> "Maximum number of items that can be seen during the search. If it is too small, the program will exit by error.")
-            .value_parser(clap::value_parser!(usize))
-            .default_value("10000000")
-        )
-        .get_matches();
+    let args = SetEnumArgs::parse();
+    let mut helper = Helper::start()?;
 
-    let max_depth = *matches.get_one("depth").unwrap();
+    let mut nm = NameMap::new();
 
-    let mut init_set = Vec::from_iter(matches.get_many("init").unwrap().map(String::as_ref));
-    let init_file;
-    if let Some(path) = matches.get_one::<PathBuf>("init-file") {
-        init_file = std::fs::read_to_string(path)?;
-        init_set.extend(init_file.lines());
+    let mut init: Vec<u32> = args.init.iter().map(|name| nm.intern(name)).collect();
+    if let Some(path) = &args.init_file {
+        init.extend(std::fs::read_to_string(path)?.lines().map(|n| nm.intern(n)));
+    }
+    init.sort();
+    init.dedup();
+
+    let mut allowed_items = usize::MAX;
+    if let Some(path) = &args.subset {
+        for name in std::fs::read_to_string(path)?.lines() {
+            nm.intern(name);
+        }
+        allowed_items = nm.len();
     }
 
-    let mut subset_of = Vec::new();
-    let subset_file;
-    if let Some(path) = matches.get_one::<PathBuf>("subset-file") {
-        subset_file = std::fs::read_to_string(path)?;
-        subset_of.extend(subset_file.lines());
+    let mut blocked = vec![BLOCKED, BLOCKED];
+    let mut recipe = HashMap::new();
+
+    for depth in 1..=args.depth {
+        blocked.reserve(nm.len() - blocked.len());
+        helper.progress_reset(nm.len() - blocked.len(), "tokenize")?;
+        for i in blocked.len()..nm.len() {
+            let c = helper.tokenize(i as u32, &nm)?;
+            let mut b = 0;
+            b |= if allowed_items <= i { BLOCKED } else { 0 };
+            b |= if args.token1 < c { BLOCKED_FIRST } else { 0 };
+            b |= if args.token2 < c { BLOCKED_SECOND } else { 0 };
+            blocked.push(b);
+        }
+
+        let mut to_pair = Vec::new();
+        for &u in &init {
+            if blocked[u as usize] & (BLOCKED_SECOND & BLOCKED_INIT) == 0 {
+                blocked[u as usize] |= BLOCKED_INIT;
+                to_pair.push(u);
+            }
+        }
+
+        let instant = Instant::now();
+        let mut queue = Vec::new();
+        for &u in &init {
+            if blocked[u as usize] & BLOCKED_FIRST == 0 {
+                queue.push(u);
+                collect_next_pairs(
+                    depth - 1,
+                    0,
+                    &mut queue,
+                    &mut blocked,
+                    &mut to_pair,
+                    &mut recipe,
+                );
+                queue.pop();
+            }
+        }
+        eprintln!("depth={}: {}ms", depth, instant.elapsed().as_millis());
+
+        for &u in &init {
+            blocked[u as usize] &= !BLOCKED_INIT;
+        }
+
+        let mut new_pairs = Vec::new();
+        for (&pair, &result) in &recipe {
+            if result == UNKNOWN {
+                new_pairs.push(pair);
+            }
+        }
+        new_pairs.sort();
+
+        helper.progress_reset(new_pairs.len(), "pair")?;
+        for &pair in &new_pairs {
+            let result = helper.pair(pair.get(), &mut nm)?;
+            recipe.insert(pair, result);
+        }
     }
 
-    let args = SearchArgs {
-        init_set,
-        subset_of,
-        max_token_first: *matches.get_one("token-first").unwrap(),
-        max_token_second: *matches.get_one("token-second").unwrap(),
-        alloc_size: *matches.get_one("alloc-size").unwrap(),
-    };
-    enumerate_sets(max_depth, &args)?;
     Ok(())
 }
