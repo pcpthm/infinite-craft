@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 pub mod set_enum;
+// pub mod subset;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SymPair(u64);
