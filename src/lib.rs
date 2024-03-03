@@ -65,26 +65,39 @@ impl NameMap {
     }
 }
 
-pub struct Recipe(HashMap<SymPair, u32>);
+#[inline]
+#[allow(unused)]
+fn pair(u: u32, v: u32) -> u64 {
+    (u as u64) << 32 | (v as u64)
+}
+
+pub struct Recipe {
+    pair: HashMap<SymPair, u32>,
+    max_item: u32,
+}
 
 impl Recipe {
     pub fn new() -> Self {
-        Self(HashMap::new())
+        Self {
+            pair: HashMap::new(),
+            max_item: NOTHING,
+        }
     }
 
     #[inline]
     pub fn get(&self, u: u32, v: u32) -> Option<u32> {
-        self.0.get(&SymPair::new(u, v)).copied()
+        self.pair.get(&SymPair::new(u, v)).copied()
     }
 
     #[inline]
     pub fn contains(&self, u: u32, v: u32) -> bool {
-        self.0.contains_key(&SymPair::new(u, v))
+        self.pair.contains_key(&SymPair::new(u, v))
     }
 
     #[inline]
     pub fn insert(&mut self, u: u32, v: u32, w: u32) {
-        self.0.insert(SymPair::new(u, v), w);
+        self.pair.insert(SymPair::new(u, v), w);
+        self.max_item = self.max_item.max(w);
     }
 }
 

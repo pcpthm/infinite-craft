@@ -4,99 +4,121 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
-use crate::{Recipe, SymPair};
+use crate::{Recipe, SymPair, NOTHING};
 
-pub const BLOCKED: u8 = 1;
-pub const BLOCKED_FIRST: u8 = 2;
-pub const BLOCKED_SECOND: u8 = 4;
+pub struct Queue {
+    buf: Vec<u32>,
+    head: usize,
+    blocked: Vec<bool>,
+}
+
+impl Queue {
+    pub fn new(n: usize, init: &[u32]) -> Self {
+        Self::from_buf(Vec::new(), 0, n, init)
+    }
+
+    fn from_buf(buf: Vec<u32>, head: usize, n: usize, init: &[u32]) -> Self {
+        let mut blocked = vec![false; n];
+        blocked[NOTHING as usize] = true;
+        init.iter().for_each(|&u| blocked[u as usize] = true);
+        buf.iter().for_each(|&u| blocked[u as usize] = true);
+        Self { buf, head, blocked }
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[u32] {
+        &self.buf[self.head..]
+    }
+
+    #[inline]
+    pub fn dequeue(&mut self) -> Option<u32> {
+        if self.head >= self.buf.len() {
+            return None;
+        }
+        self.head += 1;
+        Some(self.buf[self.head - 1])
+    }
+
+    #[inline]
+    pub fn enqueue(&mut self, u: u32) {
+        if !std::mem::replace(&mut self.blocked[u as usize], true) {
+            self.buf.push(u);
+        }
+    }
+
+    #[inline]
+    pub fn range(&self) -> (usize, usize) {
+        (self.head, self.buf.len())
+    }
+
+    #[inline]
+    pub fn truncate(&mut self, tail: usize) {
+        for &u in &self.buf[tail..] {
+            self.blocked[u as usize] = false;
+        }
+        self.buf.truncate(tail);
+    }
+}
 
 fn enum_set_rec(
     d: usize,
-    qh: usize,
-    queue: &mut Vec<u32>,
-    blocked: &mut Vec<u8>,
+    queue: &mut Queue,
     set: &mut Vec<u32>,
     recipe: &Recipe,
-    cb: &mut impl FnMut(usize, &[u32], &[u32], &[u8]),
+    cb: &mut impl FnMut(&Queue, &[u32]),
 ) {
     if d == 0 {
-        cb(qh, queue, set, blocked);
+        cb(queue, set);
         return;
     }
-    let qt = queue.len();
-    for i in qh..qt {
-        let u = queue[i];
-        if blocked[u as usize] & BLOCKED_SECOND == 0 {
-            set.push(u);
-        }
-        if blocked[u as usize] & BLOCKED_FIRST == 0 {
-            for &v in set.iter() {
-                if let Some(w) = recipe.get(u, v) {
-                    if blocked[w as usize] & BLOCKED == 0 {
-                        blocked[w as usize] |= BLOCKED;
-                        queue.push(w);
-                    }
-                }
+    let (head, tail) = queue.range();
+    while let Some(u) = queue.dequeue() {
+        set.push(u);
+        for &v in set.iter() {
+            if let Some(w) = recipe.get(u, v) {
+                queue.enqueue(w);
             }
         }
-        enum_set_rec(d - 1, i + 1, queue, blocked, set, recipe, cb);
-        for &w in &queue[qt..] {
-            blocked[w as usize] &= !BLOCKED;
-        }
-        queue.truncate(qt);
-        if set.last() == Some(&u) {
-            set.pop();
-        }
+        enum_set_rec(d - 1, queue, set, recipe, cb);
+        set.pop();
+        queue.truncate(tail);
     }
+    queue.head = head;
 }
 
-pub fn enum_set(
-    d: usize,
-    init: &[u32],
-    blocked: &[u8],
-    recipe: &Recipe,
-    cb: &mut impl FnMut(usize, &[u32], &[u32], &[u8]),
-) {
+fn get_n(init: &[u32], recipe: &Recipe) -> usize {
+    init.iter().fold(recipe.max_item, |acc, &u| acc.max(u)) as usize + 1
+}
+
+pub fn enum_set(d: usize, init: &[u32], recipe: &Recipe, cb: &mut impl FnMut(&Queue, &[u32])) {
     assert!(d > 0);
-    let mut queue = Vec::new();
-    let mut blocked = blocked.to_owned();
+    let mut queue = Queue::new(get_n(init, recipe), init);
     let mut set = Vec::new();
     for &u in init {
-        if blocked[u as usize] & BLOCKED_SECOND == 0 {
-            set.push(u);
-        }
-        if blocked[u as usize] & BLOCKED_FIRST == 0 {
-            for &v in &set {
-                if let Some(w) = recipe.get(u, v) {
-                    if blocked[w as usize] & BLOCKED == 0 {
-                        blocked[w as usize] |= BLOCKED;
-                        queue.push(w);
-                    }
-                }
+        set.push(u);
+        for &v in &set {
+            if let Some(w) = recipe.get(u, v) {
+                queue.enqueue(w);
             }
         }
     }
-    enum_set_rec(d - 1, 0, &mut queue, &mut blocked, &mut set, recipe, cb);
+    enum_set_rec(d - 1, &mut queue, &mut set, recipe, cb);
 }
 
 fn collect_new_pairs_leaf(
-    qh: usize,
-    queue: &[u32],
-    blocked: &[u8],
-    set: &[u32],
+    first: &[u32],
+    second: &[u32],
     recipe: &Recipe,
     new_pairs: &mut HashSet<SymPair>,
 ) {
-    for &u in &queue[qh..] {
-        if blocked[u as usize] & BLOCKED_FIRST == 0 {
-            for &v in set.iter() {
-                if !recipe.contains(u, v) {
-                    new_pairs.insert(SymPair::new(u, v));
-                }
+    for &u in first {
+        for &v in second {
+            if !recipe.contains(u, v) {
+                new_pairs.insert(SymPair::new(u, v));
             }
-            if blocked[u as usize] & BLOCKED_SECOND == 0 && !recipe.contains(u, u) {
-                new_pairs.insert(SymPair::new(u, u));
-            }
+        }
+        if !recipe.contains(u, u) {
+            new_pairs.insert(SymPair::new(u, u));
         }
     }
 }
@@ -104,44 +126,40 @@ fn collect_new_pairs_leaf(
 pub fn collect_new_pairs(
     depth: usize,
     init: &[u32],
-    blocked: &[u8],
     recipe: &Recipe,
     new_pairs: &mut HashSet<SymPair>,
-) {
-    let pd = depth.min(5);
-    let mut states = Vec::new();
-    if pd == 0 {
-        for &u in init {
-            if blocked[u as usize] & BLOCKED_SECOND == 0 {
-                states.push((0, vec![u], init.to_owned()));
-            }
-        }
-    } else {
-        enum_set(pd, init, blocked, recipe, &mut |qh, queue, set, _| {
-            states.push((qh, queue.to_owned(), set.to_owned()));
-        });
+) -> u64 {
+    if depth == 0 {
+        collect_new_pairs_leaf(init, init, recipe, new_pairs);
+        return 1;
     }
 
+    let pd = depth.min(5);
+    let mut states = Vec::new();
+    enum_set(pd, init, recipe, &mut |queue, set| {
+        states.push((queue.buf.as_slice().to_owned(), queue.head, set.to_owned()));
+    });
+
     let mut new_pairs_list = vec![HashSet::new(); states.len()];
-    states
+    let count = states
         .into_par_iter()
         .zip(new_pairs_list.par_iter_mut())
-        .for_each(|((qh, mut queue, mut set), new_pairs)| {
-            let mut blocked = blocked.to_owned();
-            for &u in queue.iter() {
-                blocked[u as usize] |= BLOCKED;
-            }
+        .map(|((buf, head, mut set), new_pairs)| {
+            let mut queue = Queue::from_buf(buf, head, get_n(init, recipe), init);
+            let mut count = 0u64;
             enum_set_rec(
                 depth - pd,
-                qh,
                 &mut queue,
-                &mut blocked,
                 &mut set,
                 recipe,
-                &mut |qh, queue, set, blocked| {
-                    collect_new_pairs_leaf(qh, queue, blocked, set, recipe, new_pairs);
+                &mut |queue, set| {
+                    collect_new_pairs_leaf(queue.as_slice(), set, recipe, new_pairs);
+                    count += 1;
                 },
             );
-        });
+            count
+        })
+        .sum::<u64>();
     new_pairs.extend(new_pairs_list.into_iter().flatten());
+    count
 }

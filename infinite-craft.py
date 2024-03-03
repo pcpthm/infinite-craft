@@ -97,7 +97,7 @@ def tokenize(name: str) -> int:
 
 def main():
     try:
-        progress = tqdm()
+        progress = tqdm(delay=1)
         for line in sys.stdin:
             cmd, rest = line.strip().split(":", maxsplit=1)
             if cmd == "pair":
@@ -111,8 +111,10 @@ def main():
                 print(count, flush=True)
             elif cmd == "progress_reset":
                 count, rest = rest.split(" ", maxsplit=1)
+                progress.disable = True  # Suppress display in `progress.reset()`
                 progress.set_description(rest, False)
                 progress.reset(int(count))
+                progress.disable = False
     except BrokenPipeError:
         pass
     except KeyboardInterrupt:

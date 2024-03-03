@@ -12,7 +12,7 @@ use clap::Parser;
 use helper::Helper;
 use infinite_craft::{
     get_path,
-    set_enum::{collect_new_pairs, enum_set, BLOCKED, BLOCKED_FIRST, BLOCKED_SECOND},
+    set_enum::{collect_new_pairs, enum_set},
     NameMap, Recipe,
 };
 
@@ -43,20 +43,16 @@ fn read_elements_from_file(path: &PathBuf, nm: &mut NameMap) -> anyhow::Result<V
 fn collect_recipe_next(
     d: usize,
     init: &[u32],
-    blocked: &mut [u8],
     recipe: &mut Recipe,
     nm: &mut NameMap,
     helper: &mut Helper,
 ) -> anyhow::Result<()> {
-    for &u in init {
-        blocked[u as usize] |= BLOCKED;
-    }
-
     let mut new_pairs = HashSet::new();
     {
         let instant = Instant::now();
-        collect_new_pairs(d - 1, init, blocked, recipe, &mut new_pairs);
-        eprintln!("depth={}: {}ms", d, instant.elapsed().as_millis());
+        let count = collect_new_pairs(d - 1, init, recipe, &mut new_pairs);
+        let time = instant.elapsed();
+        eprintln!("depth={}: {} sets in {}ms", d, count, time.as_millis());
     }
 
     let mut new_pairs = Vec::from_iter(new_pairs);
@@ -67,23 +63,6 @@ fn collect_recipe_next(
         let [u, v] = pair.get();
         let result = helper.pair(nm.name(u), nm.name(v))?;
         recipe.insert(u, v, nm.intern(result));
-    }
-    Ok(())
-}
-
-fn get_token_all(
-    token: (usize, usize),
-    blocked: &mut Vec<u8>,
-    nm: &NameMap,
-    helper: &mut Helper,
-) -> anyhow::Result<()> {
-    let new_item_start = blocked.len();
-    blocked.resize(nm.len(), 0);
-    helper.progress_reset(nm.len() - new_item_start, "tokenize")?;
-    for (i, b) in blocked.iter_mut().enumerate().skip(new_item_start) {
-        let c = helper.tokenize(nm.name(i as u32))?;
-        *b |= if token.0 < c { BLOCKED_FIRST } else { 0 };
-        *b |= if token.1 < c { BLOCKED_SECOND } else { 0 };
     }
     Ok(())
 }
@@ -112,23 +91,20 @@ struct EnumArgs {
 
 fn set_enum(args: &EnumArgs) -> anyhow::Result<()> {
     let mut nm = NameMap::new();
-    let mut recipe = Recipe::new();
 
-    let mut init: Vec<u32> = args.init.iter().map(|name| nm.intern(name)).collect();
+    let mut init = Vec::from_iter(args.init.iter().map(|name| nm.intern(name)));
     if let Some(path) = &args.init_file {
         init.extend(read_elements_from_file(path, &mut nm)?);
     }
     init.sort();
     init.dedup();
 
+    let mut recipe = Recipe::new();
     let mut helper = Helper::start()?;
 
-    let mut blocked = vec![BLOCKED];
     for d in 1..=args.depth {
-        get_token_all((args.token1, args.token2), &mut blocked, &nm, &mut helper)?;
-
         let start = nm.len();
-        collect_recipe_next(d, &init, &mut blocked, &mut recipe, &mut nm, &mut helper)?;
+        collect_recipe_next(d, &init, &mut recipe, &mut nm, &mut helper)?;
 
         for u in start as u32..nm.len() as u32 {
             println!("{}={}", nm.name(u), d);
@@ -167,12 +143,10 @@ fn format_triple(triple: [u32; 3], nm: &NameMap) -> String {
 fn reconstruct_path(args: &ReconstructPathArgs) -> anyhow::Result<()> {
     let mut nm = NameMap::new();
     let init = Vec::from_iter(args.init.iter().map(|name| nm.intern(name)));
-    let mut set = read_elements_from_file(&args.set, &mut nm)?;
-    set.sort();
-    set.dedup();
+    let set = read_elements_from_file(&args.set, &mut nm)?;
 
-    let mut helper = Helper::start()?;
     let mut recipe = Recipe::new();
+    let mut helper = Helper::start()?;
     get_pair_all(&nm, &mut recipe, &mut helper)?;
 
     let path = get_path(&init, &set, &recipe);
@@ -210,33 +184,26 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
     let target = read_elements_from_file(&args.target, &mut nm)?;
     let extra = read_elements_from_file(&args.extra, &mut nm)?;
     let extra = Vec::from_iter(extra.into_iter().filter(|u| !target.contains(u)));
+    let ss = nm.items().collect::<Vec<_>>();
 
     println!("{} target, {} extra", target.len(), extra.len());
 
     let mut recipe = Recipe::new();
-
-    let ss = nm.items().collect::<Vec<_>>();
     let mut helper = Helper::start()?;
     get_pair_all(&nm, &mut recipe, &mut helper)?;
-
-    let mut blocked = vec![BLOCKED];
-    let token = (args.token1, args.token2);
-    get_token_all(token, &mut blocked, &nm, &mut helper)?;
 
     // TODO: off-by-once? depth=1 should try (extra + all) for example.
     let mut extra_sets = vec![Vec::new()];
     for d in 1..=args.depth {
-        collect_recipe_next(d, &ss, &mut blocked, &mut recipe, &mut nm, &mut helper)?;
-        get_token_all(token, &mut blocked, &nm, &mut helper)?;
-        enum_set(d, &ss, &blocked, &recipe, &mut |qh, queue, set, _| {
-            for &u in &queue[qh..] {
+        collect_recipe_next(d, &ss, &mut recipe, &mut nm, &mut helper)?;
+        enum_set(d, &ss, &recipe, &mut |queue, set| {
+            for &u in queue.as_slice() {
                 let mut set = Vec::from_iter(set.iter().copied().filter(|&u| !ss.contains(&u)));
                 set.push(u);
                 extra_sets.push(set);
             }
         })
     }
-    drop(blocked);
     drop(helper);
 
     let mut state = vec![0; nm.len()];
