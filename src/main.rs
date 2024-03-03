@@ -9,11 +9,11 @@ use infinite_craft::{
     get_path,
     set_enum::{collect_new_pairs, enum_set},
     subset::{get_max_removal, get_unreachable},
-    ElementSet, RecipeSet, SymPair,
+    ElementSet, Pair, RecipeSet,
 };
 
 fn pair_all(
-    pairs: &[SymPair],
+    pairs: &[Pair],
     max_token: [usize; 2],
     elems: &mut ElementSet,
     recipe: &mut RecipeSet,
@@ -34,17 +34,17 @@ fn pair_all(
     helper.progress_reset(pairs.len(), "pair")?;
     for [u, v] in pairs.iter().map(|p| p.get()) {
         let tkc = [u, v].map(|u| elems.token_count(u).unwrap_or(usize::MAX));
-        let ok = [0, 1].map(|i| tkc[i] <= max_token[0] && tkc[1 - i] <= max_token[1]);
-        if ok[0] || ok[1] {
-            let result = helper.pair(elems.name(u), elems.name(v))?;
-            let w = elems.intern(result);
-            if ok[0] {
-                recipe.insert_half(u, v, w);
-            }
-            if u != v && ok[1] {
-                recipe.insert_half(v, u, w);
-            }
+        if tkc[0] > max_token[0] || tkc[1] > max_token[1] {
+            continue;
         }
+        let w = if let Some(w) = recipe.get(v, u) {
+            w
+        } else {
+            let (u, v) = if u > v { (v, u) } else { (u, v) };
+            let result = helper.pair(elems.name(u), elems.name(v))?;
+            elems.intern(result)
+        };
+        recipe.insert_half(u, v, w);
     }
 
     Ok(())
@@ -106,18 +106,18 @@ fn set_enum(args: &EnumArgs) -> anyhow::Result<()> {
     let mut recipe = RecipeSet::new();
     let mut helper = Helper::start()?;
 
-    for d in 1..=args.depth {
+    for d in 0..args.depth {
         let instant = Instant::now();
-        let (pairs, count) = collect_new_pairs(d - 1, &init, &recipe);
+        let (pairs, count) = collect_new_pairs(d, &init, &recipe);
         let time = instant.elapsed();
-        eprintln!("depth={}: {} sets in {}ms", d, count, time.as_millis());
+        eprintln!("depth={}: {} sets in {}ms", d + 1, count, time.as_millis());
 
         let start = elems.len();
         let max_token = [args.token1, args.token2];
         pair_all(&pairs, max_token, &mut elems, &mut recipe, &mut helper)?;
 
         for u in start as u32..elems.len() as u32 {
-            println!("{}={}", elems.name(u), d);
+            println!("{}={}", elems.name(u), d + 1);
         }
     }
 
@@ -132,43 +132,36 @@ struct ReconstructPathArgs {
     init: Vec<String>,
 }
 
-fn get_pair_all(
-    nm: &ElementSet,
+fn format_triple(triple: [u32; 3], elems: &ElementSet) -> String {
+    let [u, v, w] = triple;
+    format!("{} + {} -> {}", elems.name(u), elems.name(v), elems.name(w))
+}
+
+fn get_all_first_pairs(
+    set: &[u32],
+    elems: &mut ElementSet,
     recipe: &mut RecipeSet,
     helper: &mut Helper,
 ) -> anyhow::Result<()> {
-    helper.progress_reset(nm.items().count() * (nm.items().count() + 1) / 2, "pair")?;
-    for u in nm.items() {
-        for v in nm.items().filter(|&v| u >= v) {
-            if let Some(w) = nm.lookup(helper.pair(nm.name(u), nm.name(v))?) {
-                // println!("{}={}={}", nm.name(u), nm.name(v), nm.name(w));
-                recipe.insert(u, v, w);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn format_triple(triple: [u32; 3], nm: &ElementSet) -> String {
-    let [u, v, w] = triple;
-    format!("{} + {} -> {}", nm.name(u), nm.name(v), nm.name(w))
+    let pairs = collect_new_pairs(0, &set, &recipe).0;
+    pair_all(&pairs, [usize::MAX, usize::MAX], elems, recipe, helper)
 }
 
 fn reconstruct_path(args: &ReconstructPathArgs) -> anyhow::Result<()> {
-    let mut nm = ElementSet::new();
-    let init = Vec::from_iter(args.init.iter().map(|name| nm.intern(name)));
-    let set = read_elements_from_file(&args.set, &mut nm)?;
+    let mut elems = ElementSet::new();
+    let init = Vec::from_iter(args.init.iter().map(|name| elems.intern(name)));
+    let set = read_elements_from_file(&args.set, &mut elems)?;
 
     let mut recipe = RecipeSet::new();
     let mut helper = Helper::start()?;
-    get_pair_all(&nm, &mut recipe, &mut helper)?;
+    get_all_first_pairs(&set, &mut elems, &mut recipe, &mut helper)?;
 
     let path = get_path(&init, &set, &recipe);
     if path.len() != set.len() {
         println!("# Incomplete ({}/{})", path.len(), set.len());
     }
     for t in path {
-        println!("{}", format_triple(t, &nm));
+        println!("{}", format_triple(t, &elems));
     }
     Ok(())
 }
@@ -204,25 +197,23 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
 
     let mut recipe = RecipeSet::new();
     let mut helper = Helper::start()?;
-    get_pair_all(&elems, &mut recipe, &mut helper)?;
 
-    // TODO: off-by-once? depth=1 should try (extra + all) for example.
-    let mut extra_sets = vec![Vec::new()];
-    for d in 1..=args.depth {
-        let (pairs, _) = collect_new_pairs(d - 1, &init, &recipe);
-
+    for d in 0..=args.depth {
+        let pairs = collect_new_pairs(d, &superset, &recipe).0;
         let max_token = [args.token1, args.token2];
         pair_all(&pairs, max_token, &mut elems, &mut recipe, &mut helper)?;
 
-        enum_set(d, &superset, &recipe, &mut |queue, set| {
-            for &u in queue.as_slice() {
-                let mut set =
-                    Vec::from_iter(set.iter().copied().filter(|&u| !superset.contains(&u)));
-                set.push(u);
-                extra_sets.push(set);
-            }
-        })
+        eprintln!("{:?}", elems.lookup("Berlin"));
     }
+
+    let mut extra_sets = Vec::new();
+    enum_set(&superset, &recipe, &mut |d, _, set| {
+        let set = Vec::from_iter(set.iter().copied().filter(|&u| !superset.contains(&u)));
+        extra_sets.push(set);
+        args.depth < d
+    });
+
+    get_all_first_pairs(&superset, &mut elems, &mut recipe, &mut helper)?; // for reachability
     drop(helper);
 
     let mut state = vec![0; elems.len()];
@@ -233,6 +224,15 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
             println!("{}", elems.name(u));
         }
         return Ok(());
+    }
+
+    let berlin = elems.lookup("Berlin").unwrap();
+    let tungsten = elems.lookup("Tungsten").unwrap();
+    eprintln!("{:?}", recipe.get(berlin, tungsten));
+    for ex in &extra_sets {
+        if ex.contains(&berlin) {
+            eprintln!("{:?}", Vec::from_iter(ex.iter().map(|&u| elems.name(u))));
+        }
     }
 
     let mut min_sets: BTreeSet<Vec<u32>> = BTreeSet::new();

@@ -6,11 +6,10 @@ pub mod set_enum;
 pub mod subset;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SymPair(u64);
+pub struct Pair(u64);
 
-impl SymPair {
+impl Pair {
     pub fn new(u: u32, v: u32) -> Self {
-        let (u, v) = if u > v { (v, u) } else { (u, v) };
         Self((u as u64) << 32 | v as u64)
     }
 
@@ -75,13 +74,8 @@ impl ElementSet {
     }
 }
 
-#[inline]
-fn pair(u: u32, v: u32) -> u64 {
-    (u as u64) << 32 | (v as u64)
-}
-
 pub struct RecipeSet {
-    pair: HashMap<u64, u32>,
+    pair: HashMap<Pair, u32>,
     max_item: u32,
 }
 
@@ -95,26 +89,26 @@ impl RecipeSet {
 
     #[inline]
     pub fn get(&self, u: u32, v: u32) -> Option<u32> {
-        self.pair.get(&pair(u, v)).copied()
+        self.pair.get(&Pair::new(u, v)).copied()
     }
 
     #[inline]
     pub fn contains(&self, u: u32, v: u32) -> bool {
-        self.pair.contains_key(&pair(u, v))
+        self.pair.contains_key(&Pair::new(u, v))
     }
 
     #[inline]
     pub fn insert(&mut self, u: u32, v: u32, w: u32) {
-        self.pair.insert(pair(u, v), w);
+        self.pair.insert(Pair::new(u, v), w);
         if u != v {
-            self.pair.insert(pair(v, u), w);
+            self.pair.insert(Pair::new(v, u), w);
         }
         self.max_item = self.max_item.max(w);
     }
 
     #[inline]
     pub fn insert_half(&mut self, u: u32, v: u32, w: u32) {
-        self.pair.insert(pair(u, v), w);
+        self.pair.insert(Pair::new(u, v), w);
         self.max_item = self.max_item.max(w);
     }
 }
