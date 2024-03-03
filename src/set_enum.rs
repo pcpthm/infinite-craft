@@ -4,7 +4,7 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
-use crate::{Recipe, SymPair, NOTHING};
+use crate::{RecipeSet, SymPair, NOTHING};
 
 pub struct Queue {
     buf: Vec<u32>,
@@ -64,7 +64,7 @@ fn enum_set_rec(
     d: usize,
     queue: &mut Queue,
     set: &mut Vec<u32>,
-    recipe: &Recipe,
+    recipe: &RecipeSet,
     cb: &mut impl FnMut(&Queue, &[u32]),
 ) {
     if d == 0 {
@@ -86,11 +86,11 @@ fn enum_set_rec(
     queue.head = head;
 }
 
-fn get_n(init: &[u32], recipe: &Recipe) -> usize {
+fn get_n(init: &[u32], recipe: &RecipeSet) -> usize {
     init.iter().fold(recipe.max_item, |acc, &u| acc.max(u)) as usize + 1
 }
 
-pub fn enum_set(d: usize, init: &[u32], recipe: &Recipe, cb: &mut impl FnMut(&Queue, &[u32])) {
+pub fn enum_set(d: usize, init: &[u32], recipe: &RecipeSet, cb: &mut impl FnMut(&Queue, &[u32])) {
     assert!(d > 0);
     let mut queue = Queue::new(get_n(init, recipe), init);
     let mut set = Vec::new();
@@ -108,7 +108,7 @@ pub fn enum_set(d: usize, init: &[u32], recipe: &Recipe, cb: &mut impl FnMut(&Qu
 fn collect_new_pairs_leaf(
     first: &[u32],
     second: &[u32],
-    recipe: &Recipe,
+    recipe: &RecipeSet,
     new_pairs: &mut HashSet<SymPair>,
 ) {
     for &u in first {
@@ -123,15 +123,18 @@ fn collect_new_pairs_leaf(
     }
 }
 
-pub fn collect_new_pairs(
-    depth: usize,
-    init: &[u32],
-    recipe: &Recipe,
-    new_pairs: &mut HashSet<SymPair>,
-) -> u64 {
+fn to_vec(iter: impl IntoIterator<Item = SymPair>) -> Vec<SymPair> {
+    let mut vec = Vec::from_iter(iter);
+    vec.sort();
+    vec
+}
+
+pub fn collect_new_pairs(depth: usize, init: &[u32], recipe: &RecipeSet) -> (Vec<SymPair>, u64) {
+    let mut new_pairs = HashSet::new();
+
     if depth == 0 {
-        collect_new_pairs_leaf(init, init, recipe, new_pairs);
-        return 1;
+        collect_new_pairs_leaf(init, init, recipe, &mut new_pairs);
+        return (to_vec(new_pairs), 1);
     }
 
     let pd = depth.min(5);
@@ -160,6 +163,7 @@ pub fn collect_new_pairs(
             count
         })
         .sum::<u64>();
+
     new_pairs.extend(new_pairs_list.into_iter().flatten());
-    count
+    (to_vec(new_pairs), count)
 }

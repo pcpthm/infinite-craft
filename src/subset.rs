@@ -1,8 +1,8 @@
-use crate::Recipe;
+use crate::RecipeSet;
 
 const UNVISITED: u8 = 1;
 
-fn closure(queue: &mut Vec<u32>, state: &mut [u8], recipe: &Recipe) {
+fn closure(queue: &mut Vec<u32>, state: &mut [u8], recipe: &RecipeSet) {
     let mut qh = 0;
     while qh < queue.len() {
         let u = queue[qh];
@@ -18,7 +18,12 @@ fn closure(queue: &mut Vec<u32>, state: &mut [u8], recipe: &Recipe) {
     }
 }
 
-fn is_reachable(target: &[u32], queue: &mut Vec<u32>, state: &mut [u8], recipe: &Recipe) -> bool {
+fn is_reachable(
+    target: &[u32],
+    queue: &mut Vec<u32>,
+    state: &mut [u8],
+    recipe: &RecipeSet,
+) -> bool {
     let head = queue.len();
     closure(queue, state, recipe);
     let reachable = target.iter().all(|&u| state[u as usize] & UNVISITED == 0);
@@ -34,7 +39,7 @@ pub fn get_unreachable(
     extra: &[u32],
     target: &[u32],
     state: &mut [u8],
-    recipe: &Recipe,
+    recipe: &RecipeSet,
 ) -> Vec<u32> {
     let mut queue = init.to_owned();
     for &u in target.iter().chain(extra) {
@@ -59,7 +64,7 @@ fn dfs(
     queue: &mut Vec<u32>,
     state: &mut [u8],
     removed: &mut Vec<u32>,
-    recipe: &Recipe,
+    recipe: &RecipeSet,
     sets: &mut Vec<Vec<u32>>,
 ) {
     let mut right_maximal = true;
@@ -91,7 +96,7 @@ pub fn get_max_removal(
     target: &[u32],
     extra: &[u32],
     state: &mut [u8],
-    recipe: &Recipe,
+    recipe: &RecipeSet,
     sets: &mut Vec<Vec<u32>>,
 ) {
     let mut queue = init.to_owned();

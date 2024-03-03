@@ -41,7 +41,6 @@ impl Helper {
         Ok(self.line.trim_end())
     }
 
-    #[allow(unused)]
     pub fn tokenize(&mut self, name: &str) -> anyhow::Result<usize> {
         writeln!(&mut self.child_in, "tokenize:{}", name)?;
         self.child_in.flush()?;

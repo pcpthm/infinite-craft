@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 pub mod set_enum;
-// pub mod subset;
+pub mod subset;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SymPair(u64);
@@ -21,32 +21,34 @@ impl SymPair {
 
 pub const NOTHING: u32 = 0;
 
-pub struct NameMap {
+pub struct ElementSet {
     name: Vec<String>,
-    id: HashMap<String, u32>,
+    by_name: HashMap<String, u32>,
+    token_count: HashMap<u32, usize>,
 }
 
-impl NameMap {
+impl ElementSet {
     pub fn new() -> Self {
         Self {
             name: vec!["Nothing".to_owned()],
-            id: [("".to_owned(), NOTHING)].into_iter().collect(),
+            by_name: [("".to_owned(), NOTHING)].into_iter().collect(),
+            token_count: HashMap::new(),
         }
     }
 
     pub fn intern(&mut self, name: &str) -> u32 {
-        if let Some(&id) = self.id.get(name) {
+        if let Some(&id) = self.by_name.get(name) {
             return id;
         }
         let id = self.name.len() as u32;
         self.name.push(name.to_string());
-        self.id.insert(name.to_owned(), id);
+        self.by_name.insert(name.to_owned(), id);
         id
     }
 
     #[inline]
     pub fn lookup(&self, name: &str) -> Option<u32> {
-        self.id.get(name).copied()
+        self.by_name.get(name).copied()
     }
 
     #[inline]
@@ -63,20 +65,27 @@ impl NameMap {
     pub fn items(&self) -> impl Iterator<Item = u32> {
         1u32..self.len() as u32
     }
+
+    pub fn token_count(&self, u: u32) -> Option<usize> {
+        self.token_count.get(&u).copied()
+    }
+
+    pub fn set_token_count(&mut self, u: u32, count: usize) {
+        self.token_count.insert(u, count);
+    }
 }
 
 #[inline]
-#[allow(unused)]
 fn pair(u: u32, v: u32) -> u64 {
     (u as u64) << 32 | (v as u64)
 }
 
-pub struct Recipe {
-    pair: HashMap<SymPair, u32>,
+pub struct RecipeSet {
+    pair: HashMap<u64, u32>,
     max_item: u32,
 }
 
-impl Recipe {
+impl RecipeSet {
     pub fn new() -> Self {
         Self {
             pair: HashMap::new(),
@@ -86,22 +95,31 @@ impl Recipe {
 
     #[inline]
     pub fn get(&self, u: u32, v: u32) -> Option<u32> {
-        self.pair.get(&SymPair::new(u, v)).copied()
+        self.pair.get(&pair(u, v)).copied()
     }
 
     #[inline]
     pub fn contains(&self, u: u32, v: u32) -> bool {
-        self.pair.contains_key(&SymPair::new(u, v))
+        self.pair.contains_key(&pair(u, v))
     }
 
     #[inline]
     pub fn insert(&mut self, u: u32, v: u32, w: u32) {
-        self.pair.insert(SymPair::new(u, v), w);
+        self.pair.insert(pair(u, v), w);
+        if u != v {
+            self.pair.insert(pair(v, u), w);
+        }
+        self.max_item = self.max_item.max(w);
+    }
+
+    #[inline]
+    pub fn insert_half(&mut self, u: u32, v: u32, w: u32) {
+        self.pair.insert(pair(u, v), w);
         self.max_item = self.max_item.max(w);
     }
 }
 
-pub fn get_path(init: &[u32], set: &[u32], recipe: &Recipe) -> Vec<[u32; 3]> {
+pub fn get_path(init: &[u32], set: &[u32], recipe: &RecipeSet) -> Vec<[u32; 3]> {
     let mut queue = Vec::new();
     for (i, &u) in init.iter().enumerate() {
         for &v in init[..i + 1].iter().rev() {

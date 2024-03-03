@@ -1,11 +1,6 @@
 mod helper;
-mod subset;
 
-use std::{
-    collections::{BTreeSet, HashSet},
-    path::PathBuf,
-    time::Instant,
-};
+use std::{collections::BTreeSet, path::PathBuf, time::Instant};
 
 use clap::Parser;
 
@@ -13,16 +8,53 @@ use helper::Helper;
 use infinite_craft::{
     get_path,
     set_enum::{collect_new_pairs, enum_set},
-    NameMap, Recipe,
+    subset::{get_max_removal, get_unreachable},
+    ElementSet, RecipeSet, SymPair,
 };
 
-use crate::subset::{get_max_removal, get_unreachable};
+fn pair_all(
+    pairs: &[SymPair],
+    max_token: [usize; 2],
+    elems: &mut ElementSet,
+    recipe: &mut RecipeSet,
+    helper: &mut Helper,
+) -> anyhow::Result<()> {
+    let mut to_tokenize = BTreeSet::new();
+    for u in pairs.iter().flat_map(|p| p.get()) {
+        if elems.token_count(u).is_none() {
+            to_tokenize.insert(u);
+        }
+    }
+    helper.progress_reset(to_tokenize.len(), "tokenize")?;
+    for u in to_tokenize {
+        let count = helper.tokenize(elems.name(u))?;
+        elems.set_token_count(u, count);
+    }
+
+    helper.progress_reset(pairs.len(), "pair")?;
+    for [u, v] in pairs.iter().map(|p| p.get()) {
+        let tkc = [u, v].map(|u| elems.token_count(u).unwrap_or(usize::MAX));
+        let ok = [0, 1].map(|i| tkc[i] <= max_token[0] && tkc[1 - i] <= max_token[1]);
+        if ok[0] || ok[1] {
+            let result = helper.pair(elems.name(u), elems.name(v))?;
+            let w = elems.intern(result);
+            if ok[0] {
+                recipe.insert_half(u, v, w);
+            }
+            if u != v && ok[1] {
+                recipe.insert_half(v, u, w);
+            }
+        }
+    }
+
+    Ok(())
+}
 
 fn default_init() -> Vec<String> {
     ["Water", "Fire", "Wind", "Earth"].map(String::from).into()
 }
 
-fn read_elements_from_file(path: &PathBuf, nm: &mut NameMap) -> anyhow::Result<Vec<u32>> {
+fn read_elements_from_file(path: &PathBuf, elems: &mut ElementSet) -> anyhow::Result<Vec<u32>> {
     let mut res = Vec::new();
     for line in std::fs::read_to_string(path)?.lines() {
         let line = line.trim();
@@ -30,41 +62,14 @@ fn read_elements_from_file(path: &PathBuf, nm: &mut NameMap) -> anyhow::Result<V
             continue;
         }
         if let Some((_, result)) = line.rsplit_once(" -> ") {
-            res.push(nm.intern(result));
+            res.push(elems.intern(result));
         } else {
-            res.push(nm.intern(line));
+            res.push(elems.intern(line));
         }
     }
     res.sort();
     res.dedup();
     Ok(res)
-}
-
-fn collect_recipe_next(
-    d: usize,
-    init: &[u32],
-    recipe: &mut Recipe,
-    nm: &mut NameMap,
-    helper: &mut Helper,
-) -> anyhow::Result<()> {
-    let mut new_pairs = HashSet::new();
-    {
-        let instant = Instant::now();
-        let count = collect_new_pairs(d - 1, init, recipe, &mut new_pairs);
-        let time = instant.elapsed();
-        eprintln!("depth={}: {} sets in {}ms", d, count, time.as_millis());
-    }
-
-    let mut new_pairs = Vec::from_iter(new_pairs);
-    new_pairs.sort();
-
-    helper.progress_reset(new_pairs.len(), "pair")?;
-    for pair in new_pairs {
-        let [u, v] = pair.get();
-        let result = helper.pair(nm.name(u), nm.name(v))?;
-        recipe.insert(u, v, nm.intern(result));
-    }
-    Ok(())
 }
 
 #[derive(Parser)]
@@ -90,24 +95,29 @@ struct EnumArgs {
 }
 
 fn set_enum(args: &EnumArgs) -> anyhow::Result<()> {
-    let mut nm = NameMap::new();
-
-    let mut init = Vec::from_iter(args.init.iter().map(|name| nm.intern(name)));
+    let mut elems = ElementSet::new();
+    let mut init = Vec::from_iter(args.init.iter().map(|name| elems.intern(name)));
     if let Some(path) = &args.init_file {
-        init.extend(read_elements_from_file(path, &mut nm)?);
+        init.extend(read_elements_from_file(path, &mut elems)?);
     }
     init.sort();
     init.dedup();
 
-    let mut recipe = Recipe::new();
+    let mut recipe = RecipeSet::new();
     let mut helper = Helper::start()?;
 
     for d in 1..=args.depth {
-        let start = nm.len();
-        collect_recipe_next(d, &init, &mut recipe, &mut nm, &mut helper)?;
+        let instant = Instant::now();
+        let (pairs, count) = collect_new_pairs(d - 1, &init, &recipe);
+        let time = instant.elapsed();
+        eprintln!("depth={}: {} sets in {}ms", d, count, time.as_millis());
 
-        for u in start as u32..nm.len() as u32 {
-            println!("{}={}", nm.name(u), d);
+        let start = elems.len();
+        let max_token = [args.token1, args.token2];
+        pair_all(&pairs, max_token, &mut elems, &mut recipe, &mut helper)?;
+
+        for u in start as u32..elems.len() as u32 {
+            println!("{}={}", elems.name(u), d);
         }
     }
 
@@ -122,7 +132,11 @@ struct ReconstructPathArgs {
     init: Vec<String>,
 }
 
-fn get_pair_all(nm: &NameMap, recipe: &mut Recipe, helper: &mut Helper) -> anyhow::Result<()> {
+fn get_pair_all(
+    nm: &ElementSet,
+    recipe: &mut RecipeSet,
+    helper: &mut Helper,
+) -> anyhow::Result<()> {
     helper.progress_reset(nm.items().count() * (nm.items().count() + 1) / 2, "pair")?;
     for u in nm.items() {
         for v in nm.items().filter(|&v| u >= v) {
@@ -135,17 +149,17 @@ fn get_pair_all(nm: &NameMap, recipe: &mut Recipe, helper: &mut Helper) -> anyho
     Ok(())
 }
 
-fn format_triple(triple: [u32; 3], nm: &NameMap) -> String {
+fn format_triple(triple: [u32; 3], nm: &ElementSet) -> String {
     let [u, v, w] = triple;
     format!("{} + {} -> {}", nm.name(u), nm.name(v), nm.name(w))
 }
 
 fn reconstruct_path(args: &ReconstructPathArgs) -> anyhow::Result<()> {
-    let mut nm = NameMap::new();
+    let mut nm = ElementSet::new();
     let init = Vec::from_iter(args.init.iter().map(|name| nm.intern(name)));
     let set = read_elements_from_file(&args.set, &mut nm)?;
 
-    let mut recipe = Recipe::new();
+    let mut recipe = RecipeSet::new();
     let mut helper = Helper::start()?;
     get_pair_all(&nm, &mut recipe, &mut helper)?;
 
@@ -179,26 +193,31 @@ struct SubsetArgs {
 }
 
 fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
-    let mut nm = NameMap::new();
-    let init = Vec::from_iter(args.init.iter().map(|name| nm.intern(name)));
-    let target = read_elements_from_file(&args.target, &mut nm)?;
-    let extra = read_elements_from_file(&args.extra, &mut nm)?;
+    let mut elems = ElementSet::new();
+    let init = Vec::from_iter(args.init.iter().map(|name| elems.intern(name)));
+    let target = read_elements_from_file(&args.target, &mut elems)?;
+    let extra = read_elements_from_file(&args.extra, &mut elems)?;
     let extra = Vec::from_iter(extra.into_iter().filter(|u| !target.contains(u)));
-    let ss = nm.items().collect::<Vec<_>>();
+    let superset = elems.items().collect::<Vec<_>>();
 
     println!("{} target, {} extra", target.len(), extra.len());
 
-    let mut recipe = Recipe::new();
+    let mut recipe = RecipeSet::new();
     let mut helper = Helper::start()?;
-    get_pair_all(&nm, &mut recipe, &mut helper)?;
+    get_pair_all(&elems, &mut recipe, &mut helper)?;
 
     // TODO: off-by-once? depth=1 should try (extra + all) for example.
     let mut extra_sets = vec![Vec::new()];
     for d in 1..=args.depth {
-        collect_recipe_next(d, &ss, &mut recipe, &mut nm, &mut helper)?;
-        enum_set(d, &ss, &recipe, &mut |queue, set| {
+        let (pairs, _) = collect_new_pairs(d - 1, &init, &recipe);
+
+        let max_token = [args.token1, args.token2];
+        pair_all(&pairs, max_token, &mut elems, &mut recipe, &mut helper)?;
+
+        enum_set(d, &superset, &recipe, &mut |queue, set| {
             for &u in queue.as_slice() {
-                let mut set = Vec::from_iter(set.iter().copied().filter(|&u| !ss.contains(&u)));
+                let mut set =
+                    Vec::from_iter(set.iter().copied().filter(|&u| !superset.contains(&u)));
                 set.push(u);
                 extra_sets.push(set);
             }
@@ -206,12 +225,12 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
     }
     drop(helper);
 
-    let mut state = vec![0; nm.len()];
+    let mut state = vec![0; elems.len()];
     let unreachable = get_unreachable(&init, &extra, &target, &mut state, &recipe);
     if !unreachable.is_empty() {
         println!("# {} targets unreachable", unreachable.len());
         for &u in &unreachable {
-            println!("{}", nm.name(u));
+            println!("{}", elems.name(u));
         }
         return Ok(());
     }
@@ -245,11 +264,11 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
         let removed = Vec::from_iter(extra.iter().copied().filter(|&u| !set.contains(&u)));
         print!("# Added {}: ", added.len());
         for &u in &added {
-            print!("{:?}, ", nm.name(u))
+            print!("{:?}, ", elems.name(u))
         }
         print!("Removed {}: ", removed.len());
         for &u in &removed {
-            print!("{:?}, ", nm.name(u))
+            print!("{:?}, ", elems.name(u))
         }
         println!();
     }
