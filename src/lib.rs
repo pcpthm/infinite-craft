@@ -5,20 +5,9 @@ use std::collections::{HashMap, HashSet};
 pub mod set_enum;
 pub mod subset;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Pair(u64);
-
-impl Pair {
-    pub fn new(u: u32, v: u32) -> Self {
-        Self((u as u64) << 32 | v as u64)
-    }
-
-    pub fn get(self) -> [u32; 2] {
-        [(self.0 >> 32) as u32, self.0 as u32]
-    }
-}
-
-pub const NOTHING: u32 = 0;
+pub const UNKNOWN: u32 = 0;
+pub const NOTHING: u32 = 1;
+pub const PLACEHOLDER: u32 = !0;
 
 pub struct ElementSet {
     name: Vec<String>,
@@ -29,7 +18,7 @@ pub struct ElementSet {
 impl ElementSet {
     pub fn new() -> Self {
         Self {
-            name: vec!["Nothing".to_owned()],
+            name: vec!["=unknown=".to_owned(), "Nothing".to_owned()],
             by_name: [("".to_owned(), NOTHING)].into_iter().collect(),
             token_count: HashMap::new(),
         }
@@ -62,7 +51,7 @@ impl ElementSet {
 
     #[inline]
     pub fn items(&self) -> impl Iterator<Item = u32> {
-        1u32..self.len() as u32
+        NOTHING + 1..self.len() as u32
     }
 
     pub fn token_count(&self, u: u32) -> Option<usize> {
@@ -74,42 +63,55 @@ impl ElementSet {
     }
 }
 
-pub struct RecipeSet {
-    pair: HashMap<Pair, u32>,
-    max_item: u32,
-}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Pair(u64);
 
-impl RecipeSet {
-    pub fn new() -> Self {
-        Self {
-            pair: HashMap::new(),
-            max_item: NOTHING,
-        }
+impl Pair {
+    #[inline]
+    pub fn new(u: u32, v: u32) -> Self {
+        Self((u as u64) << 32 | v as u64)
     }
 
     #[inline]
-    pub fn get(&self, u: u32, v: u32) -> Option<u32> {
-        self.pair.get(&Pair::new(u, v)).copied()
+    pub fn get(self) -> [u32; 2] {
+        [(self.0 >> 32) as u32, self.0 as u32]
+    }
+}
+
+#[inline]
+pub fn sym_pair(u: u32, v: u32) -> (Pair, bool) {
+    let (u, v, b) = if u <= v { (u, v, false) } else { (v, u, true) };
+    (Pair::new(u, v), b)
+}
+
+#[derive(Clone)]
+pub struct RecipeSet(HashMap<Pair, [u32; 2]>);
+
+impl RecipeSet {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    #[inline]
+    pub fn get(&self, u: u32, v: u32) -> u32 {
+        let (k, b) = sym_pair(u, v);
+        self.0.get(&k).map(|r| r[b as usize]).unwrap_or(UNKNOWN)
     }
 
     #[inline]
     pub fn contains(&self, u: u32, v: u32) -> bool {
-        self.pair.contains_key(&Pair::new(u, v))
-    }
-
-    #[inline]
-    pub fn insert(&mut self, u: u32, v: u32, w: u32) {
-        self.pair.insert(Pair::new(u, v), w);
-        if u != v {
-            self.pair.insert(Pair::new(v, u), w);
-        }
-        self.max_item = self.max_item.max(w);
+        let (k, b) = sym_pair(u, v);
+        self.0.get(&k).is_some_and(|r| r[b as usize] != UNKNOWN)
     }
 
     #[inline]
     pub fn insert_half(&mut self, u: u32, v: u32, w: u32) {
-        self.pair.insert(Pair::new(u, v), w);
-        self.max_item = self.max_item.max(w);
+        let (k, b) = sym_pair(u, v);
+        self.0.entry(k).or_insert([UNKNOWN, UNKNOWN])[b as usize] = w;
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -127,16 +129,15 @@ pub fn get_path(init: &[u32], set: &[u32], recipe: &RecipeSet) -> Vec<[u32; 3]> 
         let [u, v] = queue[qh];
         qh += 1;
 
-        if let Some(w) = recipe.get(u, v) {
-            if set.remove(&w) {
-                path.push([u, v, w]);
+        let w = recipe.get(u, v);
+        if set.remove(&w) {
+            path.push([u, v, w]);
 
-                for &[_, _, x] in path.iter().rev() {
-                    queue.push([w, x]);
-                }
-                for &x in init.iter().rev() {
-                    queue.push([w, x]);
-                }
+            for &[_, _, x] in path.iter().rev() {
+                queue.push([w, x]);
+            }
+            for &x in init.iter().rev() {
+                queue.push([w, x]);
             }
         }
     }

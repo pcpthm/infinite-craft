@@ -8,11 +8,10 @@ fn closure(queue: &mut Vec<u32>, state: &mut [u8], recipe: &RecipeSet) {
         let u = queue[qh];
         qh += 1;
         for i in 0..qh {
-            if let Some(w) = recipe.get(u, queue[i]) {
-                if state[w as usize] & UNVISITED != 0 {
-                    state[w as usize] &= !UNVISITED;
-                    queue.push(w);
-                }
+            let w = recipe.get(u, queue[i]);
+            if state[w as usize] & UNVISITED != 0 {
+                state[w as usize] &= !UNVISITED;
+                queue.push(w);
             }
         }
     }
