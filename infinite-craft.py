@@ -58,6 +58,7 @@ def get_pair(first: str, second: str, force_request: bool = False) -> Optional[s
     logging.debug("pair(%r, %r) = %r", first, second, json)
 
     assert isinstance(json, dict)
+    json["emoji"] = json.get("emoji", "")
     assert isinstance(json["result"], str) and isinstance(json["emoji"], str) and isinstance(json["isNew"], bool)
 
     result, emoji, is_new = json["result"], json["emoji"], json["isNew"]

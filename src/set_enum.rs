@@ -4,7 +4,7 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
-use crate::{Pair, RecipeSet, NOTHING, UNKNOWN};
+use crate::{Pair, RecipeSet, NOTHING};
 
 pub struct Queue {
     buf: Vec<u32>,
@@ -19,7 +19,6 @@ impl Queue {
 
     fn from_buf(buf: Vec<u32>, head: usize, n: usize, init: &[u32]) -> Self {
         let mut blocked = vec![false; n];
-        blocked[UNKNOWN as usize] = true;
         blocked[NOTHING as usize] = true;
         init.iter().for_each(|&u| blocked[u as usize] = true);
         buf.iter().for_each(|&u| blocked[u as usize] = true);
@@ -74,7 +73,9 @@ fn enum_set_rec(
     while let Some(u) = queue.dequeue() {
         set.push(u);
         for &v in set.iter() {
-            queue.enqueue(recipe.get(u, v));
+            if let Some(w) = recipe.get(u, v) {
+                queue.enqueue(w);
+            }
         }
         enum_set_rec(queue, set, recipe, cb);
         set.pop();
@@ -92,7 +93,9 @@ pub fn enum_set(
     let mut queue = Queue::new(n, init);
     for &u in init {
         for &v in init {
-            queue.enqueue(recipe.get(u, v));
+            if let Some(w) = recipe.get(u, v) {
+                queue.enqueue(w);
+            }
         }
     }
     enum_set_rec(&mut queue, &mut init.to_owned(), recipe, cb);

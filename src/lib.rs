@@ -5,8 +5,7 @@ use std::collections::{HashMap, HashSet};
 pub mod set_enum;
 pub mod subset;
 
-pub const UNKNOWN: u32 = 0;
-pub const NOTHING: u32 = 1;
+pub const NOTHING: u32 = 0;
 pub const PLACEHOLDER: u32 = !0;
 
 pub struct ElementSet {
@@ -18,7 +17,7 @@ pub struct ElementSet {
 impl ElementSet {
     pub fn new() -> Self {
         Self {
-            name: vec!["=unknown=".to_owned(), "Nothing".to_owned()],
+            name: vec!["Nothing".to_owned()],
             by_name: [("".to_owned(), NOTHING)].into_iter().collect(),
             token_count: HashMap::new(),
         }
@@ -85,7 +84,7 @@ pub fn sym_pair(u: u32, v: u32) -> (Pair, bool) {
 }
 
 #[derive(Clone)]
-pub struct RecipeSet(HashMap<Pair, [u32; 2]>);
+pub struct RecipeSet(HashMap<Pair, u32>);
 
 impl RecipeSet {
     pub fn new() -> Self {
@@ -93,21 +92,18 @@ impl RecipeSet {
     }
 
     #[inline]
-    pub fn get(&self, u: u32, v: u32) -> u32 {
-        let (k, b) = sym_pair(u, v);
-        self.0.get(&k).map(|r| r[b as usize]).unwrap_or(UNKNOWN)
+    pub fn get(&self, u: u32, v: u32) -> Option<u32> {
+        self.0.get(&Pair::new(u, v)).copied()
     }
 
     #[inline]
     pub fn contains(&self, u: u32, v: u32) -> bool {
-        let (k, b) = sym_pair(u, v);
-        self.0.get(&k).is_some_and(|r| r[b as usize] != UNKNOWN)
+        self.0.contains_key(&Pair::new(u, v))
     }
 
     #[inline]
     pub fn insert_half(&mut self, u: u32, v: u32, w: u32) {
-        let (k, b) = sym_pair(u, v);
-        self.0.entry(k).or_insert([UNKNOWN, UNKNOWN])[b as usize] = w;
+        self.0.insert(Pair::new(u, v), w);
     }
 
     pub fn len(&self) -> usize {
@@ -129,7 +125,7 @@ pub fn get_path(init: &[u32], set: &[u32], recipe: &RecipeSet) -> Vec<[u32; 3]> 
         let [u, v] = queue[qh];
         qh += 1;
 
-        let w = recipe.get(u, v);
+        let w = recipe.get(u, v).unwrap_or(NOTHING);
         if set.remove(&w) {
             path.push([u, v, w]);
 

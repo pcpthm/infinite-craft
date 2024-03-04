@@ -54,8 +54,8 @@ fn pair_all(
         let token = [u, v].map(|u| elems.token_count(u).unwrap_or(!0));
         if token[0] <= max_token[0] && token[1] <= max_token[1] {
             let p = sym_pair(u, v).0;
-            let w = to_pair.get(&p).copied().unwrap_or_else(|| recipe.get(v, u));
-            recipe.insert_half(u, v, w);
+            let w = to_pair.get(&p).copied().or_else(|| recipe.get(v, u));
+            recipe.insert_half(u, v, w.unwrap());
         }
     }
 
@@ -218,8 +218,8 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
     pair_all(&pairs, [!0, !0], &mut elems, &mut recipe, &mut helper)?;
     drop(helper);
 
-    let mut state = vec![0; elems.len()];
-    let unreachable = get_unreachable(&init, &extra, &target, &mut state, &recipe);
+    let mut remain = vec![false; elems.len()];
+    let unreachable = get_unreachable(&init, &extra, &target, &mut remain, &recipe);
     if !unreachable.is_empty() {
         println!("# {} targets unreachable", unreachable.len());
         for &u in &unreachable {
@@ -232,7 +232,7 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
     for (i, ex) in extra_sets.iter().enumerate() {
         let mut sets = Vec::new();
         let target_ex = Vec::from_iter(target.iter().chain(ex).copied());
-        get_max_removal(&init, &target_ex, &extra, &mut state, &recipe, &mut sets);
+        get_max_removal(&init, &target_ex, &extra, &mut remain, &recipe, &mut sets);
         for rm in sets {
             let mut set = Vec::from_iter(extra.iter().copied().filter(|&u| !rm.contains(&u)));
             set.extend_from_slice(ex);
