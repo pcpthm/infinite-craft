@@ -1,14 +1,17 @@
-use crate::{RecipeSet, NOTHING};
+use std::collections::HashMap;
 
-fn closure(queue: &mut Vec<u32>, remain: &mut [bool], recipe: &RecipeSet) {
+use crate::Pair;
+
+fn closure(queue: &mut Vec<u32>, remain: &mut [bool], recipe: &HashMap<Pair, u32>) {
     let mut qh = 0;
     while qh < queue.len() {
         let u = queue[qh];
         qh += 1;
         for i in 0..qh {
-            let w = recipe.get(u, queue[i]).unwrap_or(NOTHING);
-            if std::mem::replace(&mut remain[w as usize], false) {
-                queue.push(w);
+            if let Some(&w) = recipe.get(&Pair::new(u, queue[i])) {
+                if std::mem::replace(&mut remain[w as usize], false) {
+                    queue.push(w);
+                }
             }
         }
     }
@@ -18,7 +21,7 @@ fn is_reachable(
     target: &[u32],
     queue: &mut Vec<u32>,
     remain: &mut [bool],
-    recipe: &RecipeSet,
+    recipe: &HashMap<Pair, u32>,
 ) -> bool {
     let head = queue.len();
     closure(queue, remain, recipe);
@@ -35,7 +38,7 @@ pub fn get_unreachable(
     extra: &[u32],
     target: &[u32],
     remain: &mut [bool],
-    recipe: &RecipeSet,
+    recipe: &HashMap<Pair, u32>,
 ) -> Vec<u32> {
     let mut queue = init.to_owned();
     for &u in target.iter().chain(extra) {
@@ -55,7 +58,7 @@ fn dfs(
     queue: &mut Vec<u32>,
     remain: &mut [bool],
     removed: &mut Vec<u32>,
-    recipe: &RecipeSet,
+    recipe: &HashMap<Pair, u32>,
     out: &mut Vec<Vec<u32>>,
 ) {
     let mut right_maximal = true;
@@ -86,7 +89,7 @@ pub fn get_max_removal(
     target: &[u32],
     extra: &[u32],
     remain: &mut [bool],
-    recipe: &RecipeSet,
+    recipe: &HashMap<Pair, u32>,
     out: &mut Vec<Vec<u32>>,
 ) {
     let mut queue = init.to_owned();

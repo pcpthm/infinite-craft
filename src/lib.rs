@@ -6,11 +6,12 @@ pub mod set_enum;
 pub mod subset;
 
 pub const NOTHING: u32 = 0;
-pub const PLACEHOLDER: u32 = !0;
 
 pub struct ElementSet {
     name: Vec<String>,
     by_name: HashMap<String, u32>,
+    by_lcname: HashMap<String, u32>,
+    canon: Vec<u32>,
     token_count: HashMap<u32, usize>,
 }
 
@@ -19,6 +20,8 @@ impl ElementSet {
         Self {
             name: vec!["Nothing".to_owned()],
             by_name: [("".to_owned(), NOTHING)].into_iter().collect(),
+            by_lcname: HashMap::new(),
+            canon: vec![NOTHING],
             token_count: HashMap::new(),
         }
     }
@@ -30,17 +33,21 @@ impl ElementSet {
         let id = self.name.len() as u32;
         self.name.push(name.to_string());
         self.by_name.insert(name.to_owned(), id);
-        id
-    }
 
-    #[inline]
-    pub fn lookup(&self, name: &str) -> Option<u32> {
-        self.by_name.get(name).copied()
+        let lcname = name.to_lowercase();
+        self.canon.push(*self.by_lcname.entry(lcname).or_insert(id));
+
+        id
     }
 
     #[inline]
     pub fn name(&self, id: u32) -> &str {
         &self.name[id as usize]
+    }
+
+    #[inline]
+    pub fn canon(&self, id: u32) -> u32 {
+        self.canon[id as usize]
     }
 
     #[inline]
@@ -72,46 +79,28 @@ impl Pair {
     }
 
     #[inline]
-    pub fn get(self) -> [u32; 2] {
+    pub fn get(&self) -> [u32; 2] {
         [(self.0 >> 32) as u32, self.0 as u32]
     }
 }
 
-#[inline]
-pub fn sym_pair(u: u32, v: u32) -> (Pair, bool) {
-    let (u, v, b) = if u <= v { (u, v, false) } else { (v, u, true) };
-    (Pair::new(u, v), b)
-}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SymPair(u64);
 
-#[derive(Clone)]
-pub struct RecipeSet(HashMap<Pair, u32>);
-
-impl RecipeSet {
-    pub fn new() -> Self {
-        Self(HashMap::new())
+impl SymPair {
+    #[inline]
+    pub fn new(u: u32, v: u32) -> Self {
+        let (u, v) = if u >= v { (u, v) } else { (v, u) };
+        Self((u as u64) << 32 | v as u64)
     }
 
     #[inline]
-    pub fn get(&self, u: u32, v: u32) -> Option<u32> {
-        self.0.get(&Pair::new(u, v)).copied()
-    }
-
-    #[inline]
-    pub fn contains(&self, u: u32, v: u32) -> bool {
-        self.0.contains_key(&Pair::new(u, v))
-    }
-
-    #[inline]
-    pub fn insert_half(&mut self, u: u32, v: u32, w: u32) {
-        self.0.insert(Pair::new(u, v), w);
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
+    pub fn get(&self) -> [u32; 2] {
+        [(self.0 >> 32) as u32, self.0 as u32]
     }
 }
 
-pub fn get_path(init: &[u32], set: &[u32], recipe: &RecipeSet) -> Vec<[u32; 3]> {
+pub fn get_path(init: &[u32], set: &[u32], recipe: &HashMap<Pair, u32>) -> Vec<[u32; 3]> {
     let mut queue = Vec::new();
     for (i, &u) in init.iter().enumerate() {
         for &v in init[..i + 1].iter().rev() {
@@ -125,15 +114,16 @@ pub fn get_path(init: &[u32], set: &[u32], recipe: &RecipeSet) -> Vec<[u32; 3]> 
         let [u, v] = queue[qh];
         qh += 1;
 
-        let w = recipe.get(u, v).unwrap_or(NOTHING);
-        if set.remove(&w) {
-            path.push([u, v, w]);
+        if let Some(&w) = recipe.get(&Pair::new(u, v)) {
+            if set.remove(&w) {
+                path.push([u, v, w]);
 
-            for &[_, _, x] in path.iter().rev() {
-                queue.push([w, x]);
-            }
-            for &x in init.iter().rev() {
-                queue.push([w, x]);
+                for &[_, _, x] in path.iter().rev() {
+                    queue.push([w, x]);
+                }
+                for &x in init.iter().rev() {
+                    queue.push([w, x]);
+                }
             }
         }
     }

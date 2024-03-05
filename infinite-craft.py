@@ -48,6 +48,9 @@ def get_pair(first: str, second: str, force_request: bool = False) -> Optional[s
     if first > second:
         second, first = first, second
 
+    if (len(first) > 30 or len(second) > 30) and not force_request:
+        return None
+
     existing = conn.execute("select result from pair where first = ? and second = ?", (first, second)).fetchone()
     if existing is not None and not force_request:
         return existing[0]
@@ -125,7 +128,7 @@ def main():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    conn = sqlite3.Connection("infinite-craft.db")
+    conn = sqlite3.connect("infinite-craft.db")
     conn.executescript("""
 begin;
     create table if not exists pair(first text not null, second text not null, result text null, created_at datetime null, primary key (first, second));

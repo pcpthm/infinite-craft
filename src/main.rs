@@ -1,64 +1,39 @@
-mod helper;
+mod db;
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
     time::Instant,
 };
 
 use clap::Parser;
 
-use helper::Helper;
+use db::Db;
 use infinite_craft::{
     get_path,
     set_enum::{collect_new_pairs, enum_set},
     subset::{get_max_removal, get_unreachable},
-    sym_pair, ElementSet, Pair, RecipeSet, PLACEHOLDER,
+    ElementSet, Pair,
 };
 
 fn pair_all(
     pairs: &HashSet<Pair>,
     max_token: [usize; 2],
     elems: &mut ElementSet,
-    recipe: &mut RecipeSet,
-    helper: &mut Helper,
+    recipe: &mut HashMap<Pair, u32>,
+    db: &mut Db,
 ) -> anyhow::Result<()> {
-    let mut to_tokenize = BTreeSet::new();
-    for u in pairs.iter().flat_map(|p| p.get()) {
-        if elems.token_count(u).is_none() {
-            to_tokenize.insert(u);
-        }
-    }
-    helper.progress_reset(to_tokenize.len(), "tokenize")?;
-    for u in to_tokenize {
-        let count = helper.tokenize(elems.name(u))?;
-        elems.set_token_count(u, count);
-    }
+    db.tokenize_all(pairs.iter().flat_map(|p| p.get()), elems)?;
 
-    let mut to_pair = BTreeMap::new();
-    for [u, v] in pairs.iter().map(|p| p.get()) {
-        let token = [u, v].map(|u| elems.token_count(u).unwrap_or(!0));
-        if token[0] <= max_token[0] && token[1] <= max_token[1] && !recipe.contains(v, u) {
-            to_pair.insert(sym_pair(u, v).0, PLACEHOLDER);
-        }
-    }
+    let pairs = Vec::from_iter(pairs.iter().copied().filter(|p| {
+        let t = p.get().map(|u| db.get_token_count(u).unwrap());
+        t[0] <= max_token[0] && t[1] <= max_token[1]
+    }));
+    db.pair_all(pairs.iter().copied(), elems)?;
 
-    helper.progress_reset(to_pair.len(), "pair")?;
-    for (pair, out) in to_pair.iter_mut() {
-        let [u, v] = pair.get();
-        let result = helper.pair(elems.name(u), elems.name(v))?;
-        *out = elems.intern(result);
+    for p in pairs {
+        recipe.insert(p, db.get_pair(p, elems).unwrap());
     }
-
-    for [u, v] in pairs.iter().map(|p| p.get()) {
-        let token = [u, v].map(|u| elems.token_count(u).unwrap_or(!0));
-        if token[0] <= max_token[0] && token[1] <= max_token[1] {
-            let p = sym_pair(u, v).0;
-            let w = to_pair.get(&p).copied().or_else(|| recipe.get(v, u));
-            recipe.insert_half(u, v, w.unwrap());
-        }
-    }
-
     Ok(())
 }
 
@@ -115,8 +90,8 @@ fn set_enum(args: &EnumArgs) -> anyhow::Result<()> {
     init.sort();
     init.dedup();
 
-    let mut recipe = RecipeSet::new();
-    let mut helper = Helper::start()?;
+    let mut recipe = HashMap::new();
+    let mut db = Db::open()?;
 
     for d in 0..args.depth {
         let n = elems.len();
@@ -126,7 +101,7 @@ fn set_enum(args: &EnumArgs) -> anyhow::Result<()> {
         eprintln!("depth={}: {} sets in {}ms", d + 1, count, time.as_millis());
 
         let max_token = [args.token1, args.token2];
-        pair_all(&pairs, max_token, &mut elems, &mut recipe, &mut helper)?;
+        pair_all(&pairs, max_token, &mut elems, &mut recipe, &mut db)?;
 
         for u in n as u32..elems.len() as u32 {
             println!("{}={}", elems.name(u), d + 1);
@@ -155,10 +130,10 @@ fn reconstruct_path(args: &ReconstructPathArgs) -> anyhow::Result<()> {
     let set = read_elements_from_file(&args.set, &mut elems)?;
     let all = Vec::from_iter(elems.items());
 
-    let mut recipe = RecipeSet::new();
-    let mut helper = Helper::start()?;
+    let mut recipe = HashMap::new();
+    let mut db = Db::open()?;
     let pairs = collect_new_pairs(0, elems.len(), &all, &recipe).0;
-    pair_all(&pairs, [!0, !0], &mut elems, &mut recipe, &mut helper)?;
+    pair_all(&pairs, [!0, !0], &mut elems, &mut recipe, &mut db)?;
 
     let path = get_path(&init, &set, &recipe);
     if path.len() != set.len() {
@@ -199,13 +174,13 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
 
     println!("{} target, {} extra", target.len(), extra.len());
 
-    let mut recipe = RecipeSet::new();
-    let mut helper = Helper::start()?;
+    let mut recipe = HashMap::new();
+    let mut db = Db::open()?;
 
     for d in 0..=args.depth {
         let pairs = collect_new_pairs(d, elems.len(), &superset, &recipe).0;
         let max_token = [args.token1, args.token2];
-        pair_all(&pairs, max_token, &mut elems, &mut recipe, &mut helper)?;
+        pair_all(&pairs, max_token, &mut elems, &mut recipe, &mut db)?;
     }
 
     let mut extra_sets = vec![Vec::new()];
@@ -215,8 +190,8 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
     });
 
     let pairs = collect_new_pairs(0, elems.len(), &superset, &recipe).0;
-    pair_all(&pairs, [!0, !0], &mut elems, &mut recipe, &mut helper)?;
-    drop(helper);
+    pair_all(&pairs, [!0, !0], &mut elems, &mut recipe, &mut db)?;
+    drop(db);
 
     let mut remain = vec![false; elems.len()];
     let unreachable = get_unreachable(&init, &extra, &target, &mut remain, &recipe);

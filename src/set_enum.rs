@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
-use crate::{Pair, RecipeSet, NOTHING};
+use crate::{Pair, NOTHING};
 
 pub struct Queue {
     buf: Vec<u32>,
@@ -63,7 +63,7 @@ impl Queue {
 fn enum_set_rec(
     queue: &mut Queue,
     set: &mut Vec<u32>,
-    recipe: &RecipeSet,
+    recipe: &HashMap<Pair, u32>,
     cb: &mut impl FnMut(&Queue, &[u32]) -> bool,
 ) {
     if cb(queue, set) {
@@ -73,7 +73,7 @@ fn enum_set_rec(
     while let Some(u) = queue.dequeue() {
         set.push(u);
         for &v in set.iter() {
-            if let Some(w) = recipe.get(u, v) {
+            if let Some(&w) = recipe.get(&Pair::new(u, v)) {
                 queue.enqueue(w);
             }
         }
@@ -87,13 +87,13 @@ fn enum_set_rec(
 pub fn enum_set(
     n: usize,
     init: &[u32],
-    recipe: &RecipeSet,
+    recipe: &HashMap<Pair, u32>,
     cb: &mut impl FnMut(&Queue, &[u32]) -> bool,
 ) {
     let mut queue = Queue::new(n, init);
     for &u in init {
         for &v in init {
-            if let Some(w) = recipe.get(u, v) {
+            if let Some(&w) = recipe.get(&Pair::new(u, v)) {
                 queue.enqueue(w);
             }
         }
@@ -105,13 +105,13 @@ pub fn collect_new_pairs(
     depth: usize,
     n: usize,
     init: &[u32],
-    recipe: &RecipeSet,
+    recipe: &HashMap<Pair, u32>,
 ) -> (HashSet<Pair>, u64) {
     if depth == 0 {
         let mut new_pairs = HashSet::new();
         for &u in init {
             for &v in init {
-                if !recipe.contains(u, v) {
+                if !recipe.contains_key(&Pair::new(u, v)) {
                     new_pairs.insert(Pair::new(u, v));
                 }
             }
@@ -142,11 +142,11 @@ pub fn collect_new_pairs(
                 }
                 for &u in queue.as_slice() {
                     for &v in set {
-                        if !recipe.contains(u, v) {
+                        if !recipe.contains_key(&Pair::new(u, v)) {
                             new_pairs.insert(Pair::new(u, v));
                         }
                     }
-                    if !recipe.contains(u, u) {
+                    if !recipe.contains_key(&Pair::new(u, u)) {
                         new_pairs.insert(Pair::new(u, u));
                     }
                 }
