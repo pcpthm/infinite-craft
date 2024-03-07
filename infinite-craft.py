@@ -1,4 +1,8 @@
 from datetime import datetime, timezone
+import heapq
+import os
+import random
+import re
 import time
 from typing import Any, Optional
 import logging
@@ -11,6 +15,7 @@ from tqdm import tqdm
 
 sess = None
 tokenizer = None
+model = None
 last_request = 0
 
 
@@ -99,6 +104,118 @@ def tokenize(name: str) -> int:
     return count
 
 
+example_recipes = []
+
+
+def enum_reverse_pairs(target_result: str, banned_items: list[str]):
+    import torch
+    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+    global tokenizer, model
+
+    tokenizer = tokenizer or Tokenizer.from_pretrained("oobabooga/llama-tokenizer")
+    model = model or AutoModelForCausalLM.from_pretrained(
+        os.environ["REVERESE_MODEL"], device_map="auto",
+        quantization_config=BitsAndBytesConfig(load_in_8bit=True))
+
+    banned_lc = set(item.lower() for item in banned_items)
+
+    if not example_recipes:
+        one_token_words = ("Water", "Fire", "Wind", "Earth", "Lake", "Plant", "Mountain", "Ocean", "Storm", "Cloud")
+        for first in one_token_words:
+            assert tokenize(first) == 1
+            for second in one_token_words:
+                if first <= second:
+                    result = get_pair(first, second)
+                    if result and tokenize(result) == 1:
+                        example_recipes.append((first, second, result))
+
+    # There should be a space before each word.
+    prompt_prefix = "".join(f"{r[2]} = {r[0]} + {r[1]}\n " for r in random.sample(example_recipes, 2))
+    prompt = f"{prompt_prefix}{target_result} ="
+    prompt_enc = tokenizer.encode(prompt)
+
+    pat1 = re.compile(r"^([^=]+) \+")
+    pat2 = re.compile(r"^([^=]+) \+ ([^=]+)\n$")
+
+    pq: list[tuple[float, tuple[int, ...]]] = []
+    pq.append((0.0, ()))
+    while pq:
+        batch = []
+        while pq and len(batch) < 16:
+            score, ids = heapq.heappop(pq)
+            text = tokenizer.decode(ids)
+            if "=" in text:
+                continue
+
+            if "+" in text:
+                match = pat1.match(text)
+                if not match:
+                    continue
+
+                first, = match.groups()
+                if first.startswith(" ") or first.lower() in banned_lc or len(first) > 30:
+                    continue
+
+            if "\n" in text:
+                match = pat2.match(text)
+                if not match:
+                    continue
+
+                first, second = match.groups()
+                if second.startswith(" ") or second.lower() in banned_lc or len(second) > 30:
+                    continue
+
+                yield (score, first, second)
+                continue
+
+            batch.append((score, ids))
+
+        if not batch:
+            continue
+
+        batch_ids = [prompt_enc.ids + list(ids) for _, ids in batch]
+        seq_len = max(len(ids) for ids in batch_ids)
+
+        with torch.inference_mode():
+            output = model.forward(
+                input_ids=torch.tensor([[0] * (seq_len - len(ids)) + ids for ids in batch_ids], device="cuda"),
+                attention_mask=torch.tensor([[0] * (seq_len - len(ids)) + [1] * len(ids) for ids in batch_ids], device="cuda"))
+        logits: torch.Tensor = output.logits[:, -1, :]
+        logits_base = torch.logsumexp(logits, dim=-1).tolist()
+        top_logits, top_token_ids = torch.topk(logits, k=1000)
+        for i, (score, prefix) in enumerate(batch):
+            for logit, token_id in zip(top_logits[i].tolist(), top_token_ids[i].tolist()):
+                logit -= logits_base[i]
+                if token_id == 1:
+                    continue
+
+                next_text = prefix + (token_id,)
+                next_score = score - logit
+                heapq.heappush(pq, (next_score, next_text))
+
+
+def reverse_search(target: str, banned_items: list[str], max_pairs: int) -> Optional[tuple[str, str, str]]:
+    target_lc = target.lower()
+    used = set()
+
+    progress = tqdm(zip(range(max_pairs), enum_reverse_pairs(target, banned_items)))
+    for _, (_, first, second) in progress:
+        if first > second:
+            first, second = second, first
+        pair = (first.lower(), second.lower())
+        if pair in used:
+            continue
+        used.add(pair)
+
+        result = get_pair(first, second)
+        progress.set_postfix_str(f"{first} + {second} = {result}")
+        if result and result.lower() == target_lc:
+            return first, second, result
+
+    return None
+
+
 def main():
     try:
         progress = tqdm(delay=1)
@@ -119,6 +236,23 @@ def main():
                 progress.set_description(rest, False)
                 progress.reset(int(count))
                 progress.disable = False
+            elif cmd == "reverse":
+                if "=" in rest:
+                    target, max_pairs, *banned_items = rest.split("=")
+                else:
+                    target, max_pairs, banned_items = rest, str(10**9), []
+
+                try:
+                    found = reverse_search(target, banned_items + [target], int(max_pairs))
+                except KeyboardInterrupt:
+                    found = None
+
+                if found:
+                    first, second, result = found
+                    print(first, second, result, sep="=", flush=True)
+                else:
+                    print(flush=True)
+
     except BrokenPipeError:
         pass
     except KeyboardInterrupt:
