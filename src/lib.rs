@@ -101,28 +101,26 @@ impl SymPair {
 }
 
 pub fn get_path(init: &[u32], set: &[u32], recipe: &HashMap<Pair, u32>) -> Vec<[u32; 3]> {
-    let mut queue = Vec::new();
+    let mut stack = Vec::new();
     for (i, &u) in init.iter().enumerate() {
-        for &v in init[..i + 1].iter().rev() {
-            queue.push([u, v]);
+        for &v in init[..i + 1].iter() {
+            stack.push([u, v]);
         }
     }
-    let mut qh = 0;
     let mut path = Vec::new();
     let mut set: HashSet<_> = set.iter().copied().collect();
-    while !set.is_empty() && qh < queue.len() {
-        let [u, v] = queue[qh];
-        qh += 1;
+    while !set.is_empty() && !stack.is_empty() {
+        let [u, v] = stack.pop().unwrap();
 
         if let Some(&w) = recipe.get(&Pair::new(u, v)) {
             if set.remove(&w) {
                 path.push([u, v, w]);
 
-                for &[_, _, x] in path.iter().rev() {
-                    queue.push([w, x]);
+                for &x in init.iter() {
+                    stack.push([w, x]);
                 }
-                for &x in init.iter().rev() {
-                    queue.push([w, x]);
+                for &[_, _, x] in path.iter() {
+                    stack.push([w, x]);
                 }
             }
         }

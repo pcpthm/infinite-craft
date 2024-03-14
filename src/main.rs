@@ -117,6 +117,9 @@ struct ReconstructPathArgs {
 
     #[clap(long, default_values_t = default_init())]
     init: Vec<String>,
+
+    #[clap(long)]
+    alt: bool,
 }
 
 fn format_triple(triple: [u32; 3], elems: &ElementSet) -> String {
@@ -139,8 +142,22 @@ fn reconstruct_path(args: &ReconstructPathArgs) -> anyhow::Result<()> {
     if path.len() != set.len() {
         println!("# Incomplete ({}/{})", path.len(), set.len());
     }
-    for t in path {
-        println!("{}", format_triple(t, &elems));
+    for (i, &triple) in path.iter().enumerate() {
+        if i != 0 && triple[0] != path[i - 1][2] && triple[1] != path[i - 1][2] {
+            println!();
+        }
+
+        if args.alt {
+            for j in (0..i).rev() {
+                for k in (0..j + 1).rev() {
+                    let t = [path[j][2], path[k][2], path[i][2]];
+                    if recipe.get(&Pair::new(t[0], t[1])) == Some(&t[2]) {
+                        println!("# {}", format_triple(t, &elems));
+                    }
+                }
+            }
+        }
+        println!("{}", format_triple(triple, &elems));
     }
     Ok(())
 }
@@ -183,7 +200,7 @@ fn explore_subset(args: &SubsetArgs) -> anyhow::Result<()> {
         pair_all(&pairs, max_token, &mut elems, &mut recipe, &mut db)?;
     }
 
-    let mut extra_sets = vec![Vec::new()];
+    let mut extra_sets = Vec::new();
     enum_set(elems.len(), &superset, &recipe, &mut |_, set| {
         extra_sets.push(set[superset.len()..].to_owned());
         args.depth < set.len() - superset.len() + 1

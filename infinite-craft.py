@@ -216,6 +216,49 @@ def reverse_search(target: str, banned_items: list[str], max_pairs: int) -> Opti
     return None
 
 
+def check_nothing_all():
+    to_check = []
+    for first, second in conn.execute("select first, second from pair where result is null"):
+        to_check.append((first, second))
+    for first, second in tqdm(to_check):
+        get_pair(first, second, force_request=True)
+
+
+def check_path(filename: str):
+    with open(filename, "r") as f:
+        pat = re.compile(r"^(.+) \+ (.+) -> (.+)\n?$")
+        init = ["Fire", "Earth", "Water", "Wind"]
+        elem_set = set(init)
+        err_line = None
+        for line in f:
+            if line.startswith("#"):
+                continue
+
+            match = pat.match(line)
+            if not match:
+                continue
+
+            first, second, result = match.groups()
+            if first not in elem_set:
+                print(f"{first} is not yet created")
+                err_line = line
+                break
+            if second not in elem_set:
+                print(f"{second} is not yet created")
+                err_line = line
+                break
+            if get_pair(first, second) != result:
+                print(f"{first} + {second} != {result}")
+                err_line = line
+                break
+            elem_set.add(result)
+
+        if err_line:
+            print("at line:", err_line)
+        else:
+            print(f"OK: {len(elem_set) - len(init)}")
+
+
 def main():
     try:
         progress = tqdm(delay=1)
@@ -232,7 +275,7 @@ def main():
                 print(count, flush=True)
             elif cmd == "progress_reset":
                 count, rest = rest.split(" ", maxsplit=1)
-                progress.disable = True  # Suppress display in `progress.reset()`
+                # progress.disable = True  # Suppress display in `progress.reset()`
                 progress.set_description(rest, False)
                 progress.reset(int(count))
                 progress.disable = False
@@ -252,6 +295,10 @@ def main():
                     print(first, second, result, sep="=", flush=True)
                 else:
                     print(flush=True)
+            elif cmd == "check_nothing_all":
+                check_nothing_all()
+            elif cmd == "check_path":
+                check_path(rest)
 
     except BrokenPipeError:
         pass
@@ -262,7 +309,7 @@ def main():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    conn = sqlite3.connect("infinite-craft.db")
+    conn = sqlite3.connect("infinite-craft.db", timeout=99999)
     conn.executescript("""
 begin;
     create table if not exists pair(first text not null, second text not null, result text null, created_at datetime null, primary key (first, second));
